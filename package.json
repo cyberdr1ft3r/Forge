@@ -1,0 +1,1 @@
+{"name":"forge-config-studio","version":"0.1.0","private":true,"type":"module","scripts":{"dev":"node server.js","test":"node --test tests/*.test.js"}}
