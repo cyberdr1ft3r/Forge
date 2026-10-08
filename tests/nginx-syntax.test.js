@@ -192,6 +192,58 @@ test('upstream server requires an address and rejects URL or path syntax', () =>
   }
 });
 
+test('proxy URLs and upstream addresses strictly validate bracketed IPv6', () => {
+  const proxyDocument = value => ({
+    profile: 'site-fragment',
+    source,
+    children: [block('server', [], [
+      block('location', [arg.locationPrefix('/')], [directive('proxy_pass', [arg.proxyUrl(value)], source)], source),
+    ], source)],
+  });
+  const upstreamDocument = value => ({
+    profile: 'full-config',
+    source,
+    children: [
+      block('events', [], [], source),
+      block('http', [], [
+        block('upstream', [arg.identifier('backend')], [
+          directive('upstream_server', [arg.upstreamAddress(value)], source),
+        ], source),
+      ], source),
+    ],
+  });
+
+  const validHosts = [
+    '[::]',
+    '[::1]',
+    '[2001:db8::1]',
+    '[2001:0db8:0000:0000:0000:ff00:0042:8329]',
+    '[::ffff:192.0.2.128]',
+  ];
+  for (const host of validHosts) {
+    assert.equal(serializeNginxDocument(proxyDocument(`https://${host}:8443/api`)).ok, true, `proxy ${host}`);
+    assert.equal(serializeNginxDocument(upstreamDocument(`${host}:8443`)).ok, true, `upstream ${host}`);
+  }
+
+  const invalidHosts = [
+    '[1:2]',
+    '[1::2::3]',
+    '[12345::1]',
+    '[2001:db8:0:0:0:0:0:0:1]',
+    '[2001:db8::gggg]',
+    '[::ffff:999.0.2.1]',
+  ];
+  for (const host of invalidHosts) {
+    assert.ok(validateNginxDocument(proxyDocument(`http://${host}`)).some(item => item.code === 'nginx.argument.invalid'), `proxy ${host}`);
+    assert.ok(validateNginxDocument(upstreamDocument(host)).some(item => item.code === 'nginx.argument.invalid'), `upstream ${host}`);
+  }
+
+  for (const port of ['0', '65536', '999999']) {
+    assert.ok(validateNginxDocument(proxyDocument(`http://[::1]:${port}`)).some(item => item.code === 'nginx.argument.invalid'), `proxy port ${port}`);
+    assert.ok(validateNginxDocument(upstreamDocument(`[::1]:${port}`)).some(item => item.code === 'nginx.argument.invalid'), `upstream port ${port}`);
+  }
+});
+
 test('location headers accept literal prefixes and reject unsupported matching semantics', () => {
   const locationDocument = value => ({
     profile: 'site-fragment',

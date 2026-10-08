@@ -28,11 +28,12 @@ function validPath(value: string): boolean {
 
 function validHost(host: string): boolean {
   if (host.startsWith('[')) {
-    const address = host.slice(1, -1);
-    return host.endsWith(']')
-      && address.includes(':')
-      && !address.includes(':::')
-      && /^[0-9A-Fa-f:]+$/.test(address);
+    if (!host.endsWith(']') || !/^[0-9A-Fa-f:.]+$/.test(host.slice(1, -1))) return false;
+    try {
+      return new URL(`http://${host}/`).hostname.startsWith('[');
+    } catch {
+      return false;
+    }
   }
   return host === 'localhost'
     || (host.length <= 253 && host.split('.').every(label => domainLabel.test(label.toLowerCase())));
@@ -44,7 +45,7 @@ function validPort(port: string | undefined): boolean {
 
 function validProxyUrl(value: string): boolean {
   if (value.length > 512 || /[\s\0\r\n{};"'\\$]/.test(value)) return false;
-  const match = /^https?:\/\/(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(?:\/[A-Za-z0-9._~!&()*+,=:@%/-]*)?$/.exec(value);
+  const match = /^https?:\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(?:\/[A-Za-z0-9._~!&()*+,=:@%/-]*)?$/.exec(value);
   if (match === null) return false;
   const host = match[1];
   const port = match[2];
@@ -54,7 +55,7 @@ function validProxyUrl(value: string): boolean {
 
 function validUpstreamAddress(value: string): boolean {
   if (value.length > 263 || /[\s\0\r\n{};"'\\/$]/.test(value)) return false;
-  const match = /^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/.exec(value);
+  const match = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/.exec(value);
   if (match === null || match[1] === undefined) return false;
   return validHost(match[1]) && validPort(match[2]);
 }
