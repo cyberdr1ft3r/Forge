@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {GeneratorRegistry} from '../dist/core/registry.js';
 import {
   GENERATOR_CONTRACT_VERSION,
   generateCompose,
   generateNginx,
   generateSystemd,
+  GeneratorInputError,
   generatorRegistry,
+  nginxGenerator,
   outcomes,
+  tryGenerate,
 } from '../dist/generators/index.js';
 
 const inputs = {
@@ -94,6 +98,15 @@ test('all generators conform to the versioned contract and registry', () => {
     assert.equal(typeof definition.generate, 'function');
     assert.equal(typeof definition.staticValidate, 'function');
   }
+
+  const registry = new GeneratorRegistry();
+  registry.register(nginxGenerator);
+  assert.throws(() => registry.register(nginxGenerator), /already registered/);
+  assert.throws(() => registry.register({...nginxGenerator, manifest: {...nginxGenerator.manifest, id: 'Invalid ID'}}), /Invalid generator ID/);
+  assert.throws(
+    () => registry.register({...nginxGenerator, manifest: {...nginxGenerator.manifest, id: 'duplicate-schema', inputSchema: {...nginxGenerator.manifest.inputSchema, fields: [nginxGenerator.manifest.inputSchema.fields[0], nginxGenerator.manifest.inputSchema.fields[0]]}}}),
+    /Duplicate input field/,
+  );
 });
 
 test('successful output exposes artifacts, compatibility, warnings, provenance and honest validation states', () => {
@@ -145,3 +158,65 @@ test('optional legacy defaults remain backward compatible', () => {
   assert.match(generateSystemd({service: 'myapp', user: 'appuser', workdir: '/opt/app', executable: '/usr/bin/node'}).content, /Description=Managed application/);
   assert.doesNotMatch(generateNginx({domain: 'app.example.com', port: 3000}).content, /listen 443/);
 });
+
+test('optional booleans accept only explicit booleans and distinguish omission from malformed input', () => {
+  assert.doesNotMatch(generateNginx({domain: 'app.example.com', port: 3000}).content, /listen 443/);
+  assert.doesNotMatch(generateNginx({domain: 'app.example.com', port: 3000, tls: false, websockets: false}).content, /listen 443/);
+  assert.match(generateNginx({domain: 'app.example.com', port: 3000, tls: true, websockets: true}).content, /listen 443 ssl/);
+
+  for (const value of ['true', 'false', 'yes', 0, 1, null, {}, []]) {
+    assert.throws(
+      () => generateNginx({domain: 'app.example.com', port: 3000, tls: value}),
+      error => error instanceof GeneratorInputError && error.code === 'input.boolean' && error.path === 'tls' && /true or false/.test(error.message),
+    );
+  }
+
+  const failure = outcomes.nginx({domain: 'app.example.com', port: 3000, websockets: 'false'});
+  assert.equal(failure.ok, false);
+  assert.equal(failure.validation.input.status, 'failed');
+  assert.equal(failure.diagnostics[0]?.path, 'websockets');
+});
+
+test('typed schemas reject coercible arrays and objects instead of normalizing them', () => {
+  assert.throws(() => generateNginx({domain: ['app.example.com'], port: 3000}), GeneratorInputError);
+  assert.throws(() => generateCompose({...inputs.compose, service: ['web']}), GeneratorInputError);
+  assert.throws(() => generateCompose({...inputs.compose, restart: ['always']}), GeneratorInputError);
+  assert.throws(() => generateSystemd({...inputs.systemd, arguments: ['server.js']}), GeneratorInputError);
+  assert.throws(() => generateSystemd({...inputs.systemd, description: {toString: () => 'safe'}}), GeneratorInputError);
+});
+
+test('shared lifecycle rejects ambiguous artifacts and contains static validator failures', () => {
+  const definition = {
+    manifest: nginxManifestForTest(),
+    validate: input => input,
+    normalize: input => input,
+    generate: () => ({
+      artifacts: [{id: 'support', filename: 'support.conf', mediaType: 'text/plain', role: 'supporting', content: 'safe\n'}],
+      diagnostics: [],
+      deploymentSteps: [],
+    }),
+    staticValidate: () => [],
+  };
+  const missingPrimary = tryGenerate(definition, {});
+  assert.equal(missingPrimary.ok, false);
+  assert.equal(missingPrimary.validation.static.status, 'failed');
+  assert.ok(missingPrimary.diagnostics.some(item => item.code === 'artifact.primary'));
+
+  const throwingDefinition = {...definition, staticValidate: () => { throw new Error('private detail'); }};
+  const staticFailure = tryGenerate(throwingDefinition, {});
+  assert.equal(staticFailure.ok, false);
+  assert.equal(staticFailure.diagnostics[0]?.code, 'static.unexpected');
+  assert.doesNotMatch(staticFailure.diagnostics[0]?.message ?? '', /private detail/);
+});
+
+function nginxManifestForTest() {
+  return {
+    id: 'test-generator',
+    displayName: 'Test generator',
+    contractVersion: GENERATOR_CONTRACT_VERSION,
+    generatorVersion: '1.0.0',
+    inputSchema: {version: '1.0', additionalProperties: false, fields: []},
+    compatibility: [],
+    nativeValidation: {available: false, tool: 'none', reason: 'No native validator ran.'},
+  };
+}

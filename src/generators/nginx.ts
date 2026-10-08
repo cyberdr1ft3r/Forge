@@ -29,12 +29,17 @@ export const nginxGenerator: GeneratorDefinition<NginxInput, NginxNormalized> = 
       ],
     },
     compatibility: [{technology: 'Nginx', versions: '1.18+', platform: 'Linux', notes: ['The WebSocket map belongs in the http context.', 'TLS paths assume Certbot-compatible certificate layout.']}],
-    nativeValidation: {available: false, tool: 'nginx -t', reason: 'Configuration is schema-checked in-browser, NOT verified by an Nginx parser.'},
+    nativeValidation: {available: false, tool: 'nginx -t', reason: 'Forge input checks and structural heuristics passed; an Nginx parser did not run.'},
   },
   validate(input: unknown): NginxInput {
     const record = objectInput(input);
     rejectUnknownKeys(record, ['domain', 'port', 'tls', 'websockets']);
-    return {domain: safeDomain(record.domain), port: safePort(record.port), tls: safeBoolean(record.tls), websockets: safeBoolean(record.websockets)};
+    return {
+      domain: safeDomain(record.domain),
+      port: safePort(record.port, 'Application port', 'port'),
+      tls: safeBoolean(record.tls, 'TLS', false, 'tls'),
+      websockets: safeBoolean(record.websockets, 'WebSockets', false, 'websockets'),
+    };
   },
   normalize(input: NginxInput): NginxNormalized {
     return input;

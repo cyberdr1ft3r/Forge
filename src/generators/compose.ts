@@ -37,18 +37,21 @@ export const composeGenerator: GeneratorDefinition<ComposeInput, ComposeNormaliz
       ],
     },
     compatibility: [{technology: 'Docker Compose', versions: 'Compose Specification / Docker Compose v2', notes: ['Emits the modern Compose Specification without a top-level version key.']}],
-    nativeValidation: {available: false, tool: 'docker compose config -q', reason: 'Schema-checked in-browser; Docker Compose CLI not run here.'},
+    nativeValidation: {available: false, tool: 'docker compose config -q', reason: 'Forge input checks and structural heuristics passed; Docker Compose CLI did not run.'},
   },
   validate(input: unknown): ComposeInput {
     const record = objectInput(input);
     rejectUnknownKeys(record, ['service', 'image', 'hostPort', 'containerPort', 'restart']);
-    const restart = record.restart === undefined ? 'unless-stopped' : String(record.restart);
-    if (!restartPolicies.includes(restart as RestartPolicy)) throw new GeneratorInputError('input.restart', 'Restart policy must be one of: no, always, unless-stopped, on-failure.');
+    if (record.restart !== undefined && typeof record.restart !== 'string') {
+      throw new GeneratorInputError('input.restart', 'Restart policy must be a string.', 'restart');
+    }
+    const restart = record.restart ?? 'unless-stopped';
+    if (!restartPolicies.includes(restart as RestartPolicy)) throw new GeneratorInputError('input.restart', 'Restart policy must be one of: no, always, unless-stopped, on-failure.', 'restart');
     return {
-      service: safeName(record.service, 'Service name'),
+      service: safeName(record.service, 'Service name', 'service'),
       image: safeImageReference(record.image),
-      hostPort: safePort(record.hostPort, 'Host port'),
-      containerPort: safePort(record.containerPort, 'Container port'),
+      hostPort: safePort(record.hostPort, 'Host port', 'hostPort'),
+      containerPort: safePort(record.containerPort, 'Container port', 'containerPort'),
       restart: restart as RestartPolicy,
     };
   },

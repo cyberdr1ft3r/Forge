@@ -14,8 +14,9 @@ interface SystemdInput {
 type SystemdNormalized = SystemdInput;
 
 function safeDescription(value: unknown): string {
-  const normalized = String(value ?? 'Managed application').trim();
-  if (!/^[a-zA-Z0-9 _.,()-]{1,100}$/.test(normalized)) throw new GeneratorInputError('input.description', 'Description has unsupported characters.');
+  if (value !== undefined && typeof value !== 'string') throw new GeneratorInputError('input.description', 'Description must be a string.', 'description');
+  const normalized = (value ?? 'Managed application').trim();
+  if (!/^[a-zA-Z0-9 _.,()-]{1,100}$/.test(normalized)) throw new GeneratorInputError('input.description', 'Description has unsupported characters.', 'description');
   return normalized;
 }
 
@@ -38,17 +39,17 @@ export const systemdGenerator: GeneratorDefinition<SystemdInput, SystemdNormaliz
       ],
     },
     compatibility: [{technology: 'systemd', versions: 'v232+', platform: 'Linux', notes: ['Uses common service hardening directives available in supported enterprise distributions.']}],
-    nativeValidation: {available: false, tool: 'systemd-analyze verify', reason: 'Schema-checked in-browser; systemd-analyze not run here.'},
+    nativeValidation: {available: false, tool: 'systemd-analyze verify', reason: 'Forge input checks and structural heuristics passed; systemd-analyze did not run.'},
   },
   validate(input: unknown): SystemdInput {
     const record = objectInput(input);
     rejectUnknownKeys(record, ['service', 'description', 'user', 'workdir', 'executable', 'arguments']);
     return {
-      service: safeName(record.service, 'Service name'),
+      service: safeName(record.service, 'Service name', 'service'),
       description: safeDescription(record.description),
-      user: safeName(record.user, 'Linux user'),
-      workdir: safeAbsolutePath(record.workdir, 'Working directory'),
-      executable: safeAbsolutePath(record.executable, 'Executable'),
+      user: safeName(record.user, 'Linux user', 'user'),
+      workdir: safeAbsolutePath(record.workdir, 'Working directory', 'workdir'),
+      executable: safeAbsolutePath(record.executable, 'Executable', 'executable'),
       arguments: safeSystemdArguments(record.arguments),
     };
   },

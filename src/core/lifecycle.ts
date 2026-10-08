@@ -68,7 +68,12 @@ export function tryGenerate<TInput, TNormalized>(definition: GeneratorDefinition
     } satisfies GenerationFailure;
   }
 
-  const staticDiagnostics = [...baseArtifactChecks(draft.artifacts), ...definition.staticValidate(draft.artifacts)];
+  let staticDiagnostics: readonly Diagnostic[];
+  try {
+    staticDiagnostics = [...baseArtifactChecks(draft.artifacts), ...definition.staticValidate(draft.artifacts)];
+  } catch {
+    staticDiagnostics = [{code: 'static.unexpected', severity: 'error', stage: 'static', message: 'Static artifact validation failed unexpectedly.'}];
+  }
   const native = nativeUnavailable(definition);
   const diagnostics = [...draft.diagnostics, ...staticDiagnostics, ...native.diagnostics];
   if (staticDiagnostics.some(item => item.severity === 'error')) {
@@ -97,6 +102,9 @@ export function generate<TInput, TNormalized>(definition: GeneratorDefinition<TI
   const outcome = tryGenerate(definition, rawInput);
   if (!outcome.ok) {
     const diagnostic = outcome.diagnostics.find(item => item.severity === 'error');
+    if (diagnostic?.stage === 'input') {
+      throw new GeneratorInputError(diagnostic.code, diagnostic.message, diagnostic.path);
+    }
     throw new GeneratorExecutionError(diagnostic?.code ?? 'generation.failed', diagnostic?.message ?? 'Configuration generation failed.');
   }
   return outcome;

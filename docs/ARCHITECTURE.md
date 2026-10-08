@@ -36,7 +36,7 @@ dist/                       Generated browser/Node JavaScript; never committed
 1. `validate(unknown)` treats all caller data as untrusted and returns typed input or throws a typed input error.
 2. `normalize(input)` produces one canonical representation. Sorting, defaults, casing, and other deterministic canonicalization belong here.
 3. `generate(normalized)` returns artifacts, generator diagnostics, and deployment guidance. It must not read time, randomness, environment variables, the network, or mutable global state.
-4. `staticValidate(artifacts)` checks generated structure without claiming that a native parser ran.
+4. `staticValidate(artifacts)` applies generator-owned substring/structural heuristics without parsing the target language and without claiming that a native parser ran.
 5. The shared lifecycle applies artifact invariants and attaches compatibility, validation records, warnings, and provenance.
 6. Export is a separate adapter. The current adapter selects the primary artifact and preserves the historic `{filename, content, steps, checks}` shape for the browser.
 
@@ -67,11 +67,12 @@ Each result records three distinct tiers:
 | Static | Forge checks over generated artifact structure | `passed`, `failed`, or `not-run` |
 | Native | The technology's real parser/validator | `unavailable` |
 
-`tryGenerate` returns a structured success/failure outcome. The legacy functions throw on failure to preserve existing callers. A failed input never reaches normalization or generation. A static failure withholds artifacts from the public outcome. Native validation is always `unavailable` in this browser application; instructions such as `nginx -t`, `docker compose config -q`, and `systemd-analyze verify` are operator guidance, not evidence that the commands ran.
+`tryGenerate` returns a structured success/failure outcome. The legacy functions throw on failure to preserve existing callers. A failed input never reaches normalization or generation. A static failure withholds artifacts from the public outcome. Native validation is always `unavailable` in this browser application; instructions such as `nginx -t`, `docker compose config -q`, and `systemd-analyze verify` are operator guidance, not evidence that the commands ran. A `passed` static state means only that Forge's deterministic artifact invariants and generator-specific structural heuristics found no error. It is not schema validation by, or a substitute for, the technology's parser.
 
 ## Security boundaries
 
 - All input is untrusted. Objects reject unknown keys, and every interpolated value is allow-listed or safely encoded.
+- Runtime validators reject values whose primitive type does not match the manifest. Optional fields apply their documented default only when omitted; malformed provided values never become defaults.
 - Nginx domains and ports cannot add directives.
 - Compose service names, image references, ports, and restart policies cannot add YAML nodes; emitted scalar values are JSON/YAML quoted where needed.
 - systemd paths are absolute and traversal-free. Arguments are intentionally limited to space-separated literal tokens; control characters, quoting, shell operators, backslashes, and `%` specifiers are rejected.
@@ -92,8 +93,8 @@ Each result records three distinct tiers:
 
 ## Compatibility and migration
 
-The three historic named exports and the `generators` map remain available after compilation. Their visible filename, content, deployment steps, and warning text remain compatible for valid browser inputs; an additive `metadata` field exposes the new contract result. The browser fields and copy/download workflow are unchanged.
+The three historic named exports and the `generators` map remain available after compilation. Their visible filename, content, deployment steps, and warning text remain compatible for valid browser inputs; an additive `metadata` field exposes the new contract result. The browser fields and copy/download workflow are unchanged. Generator manifests are the authoritative validation contract. The current browser field descriptors are presentation/compatibility data only and cannot weaken generator validation; making that UI fully manifest-driven belongs to the approved UI work in issue #12.
 
-Two inputs are now intentionally stricter: unknown object properties and invalid Compose restart policies are rejected instead of ignored/defaulted, and systemd arguments accept only literal tokens rather than ambiguous quoting or special syntax. These are correctness and injection-boundary changes. Users needing complex systemd escaping must edit and natively validate the generated unit outside Forge.
+Malformed inputs are now intentionally stricter: unknown properties, non-matching primitive types (including string/number stand-ins for booleans), and invalid Compose restart policies are rejected instead of coerced, ignored, or defaulted. Browser-originated string ports remain supported and are normalized to integers. systemd arguments accept only literal tokens rather than ambiguous quoting or special syntax. These are correctness and injection-boundary changes. Users needing complex systemd escaping must edit and natively validate the generated unit outside Forge.
 
 Rollback is a single revert of the architecture commit: no persistent data, remote resources, deployment state, or stored schema migrations are involved.
