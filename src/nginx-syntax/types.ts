@@ -3,7 +3,19 @@ import type {Diagnostic, OutputArtifact} from '../core/types.js';
 export type NginxContext = 'main' | 'events' | 'http' | 'server' | 'location' | 'upstream' | 'map';
 export type NginxBlockType = Exclude<NginxContext, 'main'>;
 export type NginxOutputProfile = 'full-config' | 'site-fragment';
-export type NginxArgumentKind = 'literal' | 'identifier' | 'integer' | 'domain' | 'path' | 'endpoint' | 'variable' | 'keyword' | 'header-name' | 'quoted';
+export type NginxArgumentKind =
+  | 'literal'
+  | 'identifier'
+  | 'integer'
+  | 'domain'
+  | 'path'
+  | 'proxy-url'
+  | 'upstream-address'
+  | 'location-prefix'
+  | 'variable'
+  | 'keyword'
+  | 'header-name'
+  | 'quoted';
 
 export type KnownNginxVariable =
   | '$connection_upgrade'
@@ -94,7 +106,9 @@ export const nginxArgument = Object.freeze({
   integer: (value: number): NginxArgument => ({kind: 'integer', value}),
   domain: (value: string): NginxArgument => ({kind: 'domain', value}),
   path: (value: string): NginxArgument => ({kind: 'path', value}),
-  endpoint: (value: string): NginxArgument => ({kind: 'endpoint', value}),
+  proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
+  upstreamAddress: (value: string): NginxArgument => ({kind: 'upstream-address', value}),
+  locationPrefix: (value: string): NginxArgument => ({kind: 'location-prefix', value}),
   variable: (value: KnownNginxVariable): NginxArgument => ({kind: 'variable', value}),
   keyword: (value: string): NginxArgument => ({kind: 'keyword', value}),
   headerName: (value: string): NginxArgument => ({kind: 'header-name', value}),

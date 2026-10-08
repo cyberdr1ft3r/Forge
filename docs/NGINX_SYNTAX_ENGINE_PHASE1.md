@@ -20,7 +20,7 @@ Both profiles produce configuration text only. Forge does not write files, load 
 ## Security and determinism
 
 - Directive and block names come only from the trusted registry.
-- Arguments are discriminated values with bounded grammars for identifiers, domains, paths, endpoints, variables, headers, keywords, integers, literals, and quoted text.
+- Arguments are discriminated values with bounded grammars for identifiers, domains, filesystem paths, literal HTTP(S) proxy URLs, upstream addresses, literal location prefixes, variables, headers, keywords, integers, literals, and quoted text.
 - Control characters and raw syntax delimiters are rejected outside quoted values. Quoted values escape backslashes, quotes, and `$` to prevent unintended variable expansion.
 - Paths are absolute, bounded, and traversal-free. Variables are allowlisted symbols.
 - Siblings use registry order plus semantic keys, making equivalent directive/block sets render byte-identically. Map entries preserve author order because Nginx map matching precedence can be order-sensitive.
@@ -29,7 +29,8 @@ Both profiles produce configuration text only. Forge does not write files, load 
 ## Compatibility risks and limitations
 
 - The directive registry is intentionally small. Unsupported directives are errors until a later reviewed phase adds their grammar and context rules.
-- Location matching supports safe path prefixes only; regex and named locations are intentionally absent.
+- Location matching supports literal, absolute URI prefixes only. Exact, regex, named, and modifier-based locations are intentionally absent, and glob/query syntax is rejected rather than assigned unsupported semantics.
+- `proxy_pass` accepts only literal `http://` or `https://` URLs in Phase 1; variable expressions and arbitrary snippets are not modeled. Upstream `server` entries accept only a host (or bracketed IPv6 address) with an optional port, never a URL or path.
 - Duplicate checks cover single/keyed directives, location/upstream/map identities, map keys, and identical listener/server-name pairs. They are not a complete model of all Nginx inheritance or virtual-host precedence rules.
 - Target Nginx version/module compatibility is not evaluated in Phase 1.
 - The current generator continues using its proven legacy renderer. Migrating it before Phase 2 capability planning would create an unnecessary output-compatibility risk.

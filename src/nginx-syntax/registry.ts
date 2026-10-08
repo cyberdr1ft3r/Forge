@@ -48,9 +48,9 @@ const directives = deepFreeze({
   index: {id: 'index', nginxName: 'index', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['literal'], variadic: true}], repeatability: 'single', order: 230},
   listen: {id: 'listen', nginxName: 'listen', contexts: ['server'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}, {kinds: ['keyword'], optional: true, keywords: ['default_server']}], repeatability: 'keyed', order: 300},
   server_name: {id: 'server_name', nginxName: 'server_name', contexts: ['server'], arguments: [{kinds: ['domain'], variadic: true}], repeatability: 'single', order: 310},
-  proxy_pass: {id: 'proxy_pass', nginxName: 'proxy_pass', contexts: ['location'], arguments: [{kinds: ['endpoint']}], repeatability: 'single', order: 400},
+  proxy_pass: {id: 'proxy_pass', nginxName: 'proxy_pass', contexts: ['location'], arguments: [{kinds: ['proxy-url']}], repeatability: 'single', order: 400},
   proxy_set_header: {id: 'proxy_set_header', nginxName: 'proxy_set_header', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['header-name']}, {kinds: ['literal', 'variable', 'quoted']}], repeatability: 'keyed', order: 410},
-  upstream_server: {id: 'upstream_server', nginxName: 'server', contexts: ['upstream'], arguments: [{kinds: ['endpoint']}], repeatability: 'keyed', order: 500},
+  upstream_server: {id: 'upstream_server', nginxName: 'server', contexts: ['upstream'], arguments: [{kinds: ['upstream-address']}], repeatability: 'keyed', order: 500},
   keepalive: {id: 'keepalive', nginxName: 'keepalive', contexts: ['upstream'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}], repeatability: 'single', order: 510},
 } as const satisfies Record<KnownDirectiveName, DirectiveDefinition>);
 
@@ -60,7 +60,7 @@ const blocks = deepFreeze({
   map: {blockType: 'map', parents: ['http'], header: [{kinds: ['variable']}, {kinds: ['variable']}], repeatability: 'keyed', order: 300},
   upstream: {blockType: 'upstream', parents: ['http'], header: [{kinds: ['identifier']}], repeatability: 'keyed', order: 400},
   server: {blockType: 'server', parents: ['http'], header: [], repeatability: 'repeatable', order: 500},
-  location: {blockType: 'location', parents: ['server'], header: [{kinds: ['path']}], repeatability: 'keyed', order: 600},
+  location: {blockType: 'location', parents: ['server'], header: [{kinds: ['location-prefix']}], repeatability: 'keyed', order: 600},
 } as const satisfies Record<NginxBlockType, BlockDefinition>);
 
 export function getDirectiveDefinition(name: string): DirectiveDefinition | undefined {

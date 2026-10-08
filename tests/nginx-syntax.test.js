@@ -13,9 +13,9 @@ import {
 
 const source = {kind: 'engine', id: 'nginx-syntax', version: '1.0.0'};
 
-const locationBlock = () => block('location', [arg.path('/')], [
+const locationBlock = () => block('location', [arg.locationPrefix('/')], [
   directive('proxy_set_header', [arg.headerName('Host'), arg.variable('$host')], source),
-  directive('proxy_pass', [arg.endpoint('http://127.0.0.1:3000')], source),
+  directive('proxy_pass', [arg.proxyUrl('http://127.0.0.1:3000')], source),
 ], source);
 
 const serverBlock = () => block('server', [], [
@@ -32,7 +32,7 @@ const fullDocument = () => ({
       serverBlock(),
       block('upstream', [arg.identifier('backend')], [
         directive('keepalive', [arg.integer(16)], source),
-        directive('upstream_server', [arg.endpoint('127.0.0.1:3000')], source),
+        directive('upstream_server', [arg.upstreamAddress('127.0.0.1:3000')], source),
       ], source),
       block('map', [arg.variable('$scheme'), arg.variable('$connection_upgrade')], [
         mapEntry(arg.keyword('default'), arg.keyword('off'), source),
@@ -103,7 +103,7 @@ test('site fragment emits server roots without an invalid http wrapper', () => {
 test('invalid directive context and block nesting return actionable AST paths', () => {
   const invalidContext = fullDocument();
   const http = invalidContext.children.find(node => node.kind === 'block' && node.blockType === 'http');
-  http.children.push(directive('proxy_pass', [arg.endpoint('http://127.0.0.1:3000')], source));
+  http.children.push(directive('proxy_pass', [arg.proxyUrl('http://127.0.0.1:3000')], source));
   const contextDiagnostics = validateNginxDocument(invalidContext);
   assert.ok(contextDiagnostics.some(item => item.code === 'nginx.directive.context' && item.path?.includes('children')));
 
@@ -126,9 +126,9 @@ test('unsafe arguments reject syntax injection, traversal, invalid variables, an
   const attacks = [
     directive('server_name', [arg.domain('safe.test; return 200')], source),
     directive('root', [arg.path('/srv/../secret')], source),
-    directive('proxy_pass', [arg.endpoint('http://127.0.0.1:3000\ninclude /tmp/pwn')], source),
-    directive('proxy_pass', [arg.endpoint('http://backend/$host')], source),
-    directive('proxy_pass', [arg.endpoint('http://bad..host:3000')], source),
+    directive('proxy_pass', [arg.proxyUrl('http://127.0.0.1:3000\ninclude /tmp/pwn')], source),
+    directive('proxy_pass', [arg.proxyUrl('http://backend/$host')], source),
+    directive('proxy_pass', [arg.proxyUrl('http://bad..host:3000')], source),
     directive('proxy_set_header', [arg.headerName('X-Test\rInjected'), arg.variable('$host')], source),
     directive('listen', [arg.integer(65_536)], source),
     directive('proxy_set_header', [arg.headerName('Host'), {kind: 'variable', value: '$unsafe_variable'}], source),
@@ -141,13 +141,80 @@ test('unsafe arguments reject syntax injection, traversal, invalid variables, an
   }
 });
 
+test('proxy_pass requires a literal HTTP(S) URL instead of a generic endpoint', () => {
+  const validValues = [
+    'http://upstream.internal',
+    'https://upstream.internal:8443/api/v1',
+    'http://[::1]:3000',
+  ];
+  for (const value of validValues) {
+    const document = {profile: 'site-fragment', source, children: [block('server', [], [
+      block('location', [arg.locationPrefix('/api')], [directive('proxy_pass', [arg.proxyUrl(value)], source)], source),
+    ], source)]};
+    assert.equal(serializeNginxDocument(document).ok, true, value);
+  }
+
+  const invalidValues = [
+    'upstream.internal',
+    'upstream.internal:8080',
+    'ftp://upstream.internal',
+    'http://upstream.internal/$request_uri',
+  ];
+  for (const value of invalidValues) {
+    const document = {profile: 'site-fragment', source, children: [block('server', [], [
+      block('location', [arg.locationPrefix('/api')], [directive('proxy_pass', [arg.proxyUrl(value)], source)], source),
+    ], source)]};
+    const diagnostics = validateNginxDocument(document);
+    assert.ok(diagnostics.some(item => item.code === 'nginx.argument.invalid' && /Proxy URL/.test(item.message)), value);
+  }
+});
+
+test('upstream server requires an address and rejects URL or path syntax', () => {
+  const upstreamDocument = value => ({
+    profile: 'full-config',
+    source,
+    children: [
+      block('events', [], [], source),
+      block('http', [], [
+        block('upstream', [arg.identifier('backend')], [
+          directive('upstream_server', [arg.upstreamAddress(value)], source),
+        ], source),
+      ], source),
+    ],
+  });
+
+  for (const value of ['upstream.internal', 'upstream.internal:8080', '127.0.0.1:3000', '[::1]:3000']) {
+    assert.equal(serializeNginxDocument(upstreamDocument(value)).ok, true, value);
+  }
+  for (const value of ['http://upstream.internal:8080', 'https://upstream.internal/api', 'upstream.internal:8080/api', 'upstream.internal:65536']) {
+    const diagnostics = validateNginxDocument(upstreamDocument(value));
+    assert.ok(diagnostics.some(item => item.code === 'nginx.argument.invalid' && /Upstream address/.test(item.message)), value);
+  }
+});
+
+test('location headers accept literal prefixes and reject unsupported matching semantics', () => {
+  const locationDocument = value => ({
+    profile: 'site-fragment',
+    source,
+    children: [block('server', [], [block('location', [arg.locationPrefix(value)], [], source)], source)],
+  });
+
+  for (const value of ['/', '/api/', '/assets-v1/images']) {
+    assert.equal(serializeNginxDocument(locationDocument(value)).ok, true, value);
+  }
+  for (const value of ['/images/*.jpg', '/search?term', '/../secret', '//api', '~', '@fallback', '^~ /assets']) {
+    const diagnostics = validateNginxDocument(locationDocument(value));
+    assert.ok(diagnostics.some(item => item.code === 'nginx.argument.invalid' && /Location prefix/.test(item.message)), value);
+  }
+});
+
 test('quoted values are escaped as one argument without variable expansion', () => {
   const document = {profile: 'site-fragment', source, children: [block('server', [], [
     directive('listen', [arg.integer(80)], source),
     directive('server_name', [arg.domain('quoted.example.com')], source),
-    block('location', [arg.path('/')], [
+    block('location', [arg.locationPrefix('/')], [
       directive('proxy_set_header', [arg.headerName('X-Test'), arg.quoted('hello "world" $host; } \\')], source),
-      directive('proxy_pass', [arg.endpoint('http://127.0.0.1:3000')], source),
+      directive('proxy_pass', [arg.proxyUrl('http://127.0.0.1:3000')], source),
     ], source),
   ], source)]};
   const result = serializeNginxDocument(document);
@@ -200,8 +267,8 @@ test('boundary values are accepted or rejected without throwing', () => {
   const maximum = {profile: 'site-fragment', source, children: [block('server', [], [
     directive('listen', [arg.integer(65_535)], source),
     directive('server_name', [arg.domain('boundary.example.com')], source),
-    block('location', [arg.path('/')], [
-      directive('proxy_pass', [arg.endpoint('http://127.0.0.1:3000')], source),
+    block('location', [arg.locationPrefix('/')], [
+      directive('proxy_pass', [arg.proxyUrl('http://127.0.0.1:3000')], source),
       directive('proxy_set_header', [arg.headerName('X-Boundary'), arg.quoted('a'.repeat(1024))], source),
     ], source),
   ], source)]};

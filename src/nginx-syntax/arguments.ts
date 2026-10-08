@@ -26,17 +26,44 @@ function validPath(value: string): boolean {
     && !value.split('/').includes('..');
 }
 
-function validEndpoint(value: string): boolean {
-  if (value.length > 512 || /[\s\0\r\n{};"'\\]/.test(value)) return false;
-  const match = /^(?:https?:\/\/)?(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(?:\/[A-Za-z0-9._~!&()*+,=:@%/-]*)?$/.exec(value);
+function validHost(host: string): boolean {
+  if (host.startsWith('[')) {
+    const address = host.slice(1, -1);
+    return host.endsWith(']')
+      && address.includes(':')
+      && !address.includes(':::')
+      && /^[0-9A-Fa-f:]+$/.test(address);
+  }
+  return host === 'localhost'
+    || (host.length <= 253 && host.split('.').every(label => domainLabel.test(label.toLowerCase())));
+}
+
+function validPort(port: string | undefined): boolean {
+  return port === undefined || (Number(port) >= 1 && Number(port) <= 65_535);
+}
+
+function validProxyUrl(value: string): boolean {
+  if (value.length > 512 || /[\s\0\r\n{};"'\\$]/.test(value)) return false;
+  const match = /^https?:\/\/(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(?:\/[A-Za-z0-9._~!&()*+,=:@%/-]*)?$/.exec(value);
   if (match === null) return false;
   const host = match[1];
   const port = match[2];
   if (host === undefined) return false;
-  const validHost = host.startsWith('[')
-    ? /^\[[0-9A-Fa-f:]+\]$/.test(host)
-    : host === 'localhost' || (host.length <= 253 && host.split('.').every(label => domainLabel.test(label.toLowerCase())));
-  return validHost && (port === undefined || (Number(port) >= 1 && Number(port) <= 65_535));
+  return validHost(host) && validPort(port);
+}
+
+function validUpstreamAddress(value: string): boolean {
+  if (value.length > 263 || /[\s\0\r\n{};"'\\/$]/.test(value)) return false;
+  const match = /^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/.exec(value);
+  if (match === null || match[1] === undefined) return false;
+  return validHost(match[1]) && validPort(match[2]);
+}
+
+function validLocationPrefix(value: string): boolean {
+  return value.length <= 512
+    && /^\/[A-Za-z0-9._~!&()+,=:@%/-]*$/.test(value)
+    && !value.includes('//')
+    && !value.split('/').includes('..');
 }
 
 export function validateArgument(argument: unknown, rule: ArgumentRule): string | undefined {
@@ -66,8 +93,12 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return validDomain(value) ? undefined : 'Domain must be a fully qualified DNS name.';
     case 'path':
       return validPath(value) ? undefined : 'Path must be absolute, bounded, traversal-free, and contain only safe path or glob characters.';
-    case 'endpoint':
-      return validEndpoint(value) ? undefined : 'Endpoint must be a bounded HTTP endpoint or host with an optional valid port and safe path.';
+    case 'proxy-url':
+      return validProxyUrl(value) ? undefined : 'Proxy URL must be a literal http:// or https:// URL with a valid host, optional port, and safe path.';
+    case 'upstream-address':
+      return validUpstreamAddress(value) ? undefined : 'Upstream address must be a host or bracketed IPv6 address with an optional valid port, without a scheme or path.';
+    case 'location-prefix':
+      return validLocationPrefix(value) ? undefined : 'Location prefix must be a literal absolute URI path without globs, regex modifiers, variables, traversal, or query syntax.';
     case 'header-name':
       return /^[A-Za-z][A-Za-z0-9-]{0,126}$/.test(value) ? undefined : 'Header name contains unsupported characters or is too long.';
     case 'quoted':
