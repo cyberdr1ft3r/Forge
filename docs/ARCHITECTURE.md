@@ -24,6 +24,7 @@ src/
     compose.ts              Docker Compose definition
     systemd.ts              systemd definition
     index.ts                Public API, registry, legacy adapters
+  nginx-syntax/             Nginx-specific typed AST, trusted registry, validator and serializer
 tests/
   generators.test.js        Contract, regression, determinism, and attack tests
 dist/                       Generated browser/Node JavaScript; never committed
@@ -41,6 +42,10 @@ dist/                       Generated browser/Node JavaScript; never committed
 6. Export is a separate adapter. The current adapter selects the primary artifact and preserves the historic `{filename, content, steps, checks}` shape for the browser.
 
 The result uses an artifact array today so a later issue can add related files without changing the top-level contract. Artifact ordering is significant and must be deterministic. Composition is deliberately absent until ordering, conflicts, provenance aggregation, and cross-generator validation have their own design.
+
+## Nginx syntax foundation
+
+Issue #14 Phase 1 adds an Nginx-specific typed syntax engine under `src/nginx-syntax/`. It consumes typed AST nodes, validates them against a closed directive/block registry, and emits normal Forge artifacts for either a complete `nginx.conf` or a server-only site fragment. Its diagnostics use the existing Forge diagnostic shape at the static tier. It does not register a new generator, change the legacy Nginx output, implement capability shelves, or claim native parser validation. See [`NGINX_SYNTAX_ENGINE_PHASE1.md`](NGINX_SYNTAX_ENGINE_PHASE1.md) for integration and security boundaries.
 
 ## Manifest and versioning
 
