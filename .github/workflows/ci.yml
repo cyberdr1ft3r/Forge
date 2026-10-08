@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check syntax
+        run: |
+          node --check server.js
+          node --check src/app.js
+          node --check src/generators/index.js
+          node --check tests/generators.test.js
+      - name: Unit tests
+        run: npm test
+      - name: HTTP smoke test
+        run: |
+          npm run dev > /tmp/forge-server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent http://127.0.0.1:4173/ -o /tmp/forge-home.html; then break; fi
+            sleep 1
+          done
+          grep -q 'Infrastructure Config Studio' /tmp/forge-home.html
+          curl --fail --silent http://127.0.0.1:4173/src/generators/index.js -o /dev/null
