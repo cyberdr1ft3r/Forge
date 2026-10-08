@@ -5,10 +5,13 @@
 Requires Node.js 22.
 
 ```sh
+npm install
+npm run typecheck
+npm run build
 npm test
 node --check server.js
-node --check src/app.js
-node --check src/generators/index.js
+node --check dist/app.js
+node --check dist/generators/index.js
 npm run dev
 ```
 
@@ -18,6 +21,7 @@ The browser app is available at http://127.0.0.1:4173.
 
 - Choose an issue, create a dedicated branch, and keep changes narrow.
 - Document observable behavior and the target program versions.
+- Follow the versioned generator contract and lifecycle in `docs/ARCHITECTURE.md`; do not bypass validation or interpolate raw input.
 - Add regression tests for normal, malformed, and adversarial inputs.
 - Include exact test commands and their actual results.
 - Explain native validation coverage, unsupported environments, security effects, and rollback steps.
