@@ -32,5 +32,5 @@ jobs:
             if curl --fail --silent http://127.0.0.1:4173/ -o /tmp/forge-home.html; then break; fi
             sleep 1
           done
-          grep -q 'Infrastructure Config Studio' /tmp/forge-home.html
-          curl --fail --silent http://127.0.0.1:4173/src/generators/index.js -o /dev/null
+          grep -q 'Forge — Configuration Studio' /tmp/forge-home.html || { cat /tmp/forge-server.log; exit 1; }
+          curl --fail --silent http://127.0.0.1:4173/src/generators/index.js -o /dev/null || { cat /tmp/forge-server.log; exit 1; }
