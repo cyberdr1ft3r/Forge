@@ -15,11 +15,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Build browser application
+        run: npm run build
       - name: Check syntax
         run: |
           node --check server.js
-          node --check src/app.js
-          node --check src/generators/index.js
+          node --check dist/app.js
+          node --check dist/generators/index.js
           node --check tests/generators.test.js
       - name: Unit tests
         run: npm test
@@ -33,4 +40,4 @@ jobs:
             sleep 1
           done
           grep -q 'Forge — Configuration Studio' /tmp/forge-home.html || { cat /tmp/forge-server.log; exit 1; }
-          curl --fail --silent http://127.0.0.1:4173/src/generators/index.js -o /dev/null || { cat /tmp/forge-server.log; exit 1; }
+          curl --fail --silent http://127.0.0.1:4173/dist/generators/index.js -o /dev/null || { cat /tmp/forge-server.log; exit 1; }
