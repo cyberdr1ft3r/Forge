@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {generateNginx,generateCompose,generateSystemd} from '../src/generators/index.js';
+test('nginx generates reverse proxy and HTTPS',()=>{const r=generateNginx({domain:'app.example.com',port:3000,tls:true,websockets:true});assert.match(r.content,/listen 443 ssl/);assert.match(r.content,/proxy_pass http:\/\/127.0.0.1:3000/);assert.match(r.content,/map \$http_upgrade/)});
+test('nginx rejects directive injection',()=>assert.throws(()=>generateNginx({domain:'site.test;return 200',port:3000}),/domain/i));
+test('nginx rejects invalid ports',()=>assert.throws(()=>generateNginx({domain:'site.test',port:99999}),/port/i));
+test('compose outputs safe local binding',()=>{const r=generateCompose({service:'web',image:'nginx:stable',hostPort:8080,containerPort:80});assert.match(r.content,/127\.0\.0\.1:8080:80/)});
+test('compose rejects YAML injection',()=>assert.throws(()=>generateCompose({service:'web\nextra',image:'nginx:stable',hostPort:8080,containerPort:80}),/Service name/));
+test('systemd output includes service identity',()=>{const r=generateSystemd({service:'myapp',user:'appuser',workdir:'/opt/app',executable:'/usr/bin/node',arguments:'server.js'});assert.match(r.content,/User=appuser/);assert.match(r.content,/ExecStart=\/usr\/bin\/node server.js/)});
+test('systemd rejects newline injection',()=>assert.throws(()=>generateSystemd({service:'myapp',user:'appuser',workdir:'/opt/app',executable:'/usr/bin/node',arguments:'server.js\nExecStart=/bin/sh'}),/unsupported/));
