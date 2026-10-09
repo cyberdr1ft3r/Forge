@@ -8,6 +8,7 @@ import {
   mapEntry,
   nginxArgument as arg,
   serializeNginxDocument,
+  serializeNginxHttpFragment,
   validateNginxDocument,
 } from '../dist/nginx-syntax/index.js';
 
@@ -186,7 +187,7 @@ test('upstream server requires an address and rejects URL or path syntax', () =>
   for (const value of ['upstream.internal', 'upstream.internal:8080', '127.0.0.1:3000', '[::1]:3000']) {
     assert.equal(serializeNginxDocument(upstreamDocument(value)).ok, true, value);
   }
-  for (const value of ['http://upstream.internal:8080', 'https://upstream.internal/api', 'upstream.internal:8080/api', 'upstream.internal:65536']) {
+  for (const value of ['http://upstream.internal:8080', 'https://upstream.internal/api', 'upstream.internal:8080/api', 'upstream.internal:65536', '999.999.999.999:8080']) {
     const diagnostics = validateNginxDocument(upstreamDocument(value));
     assert.ok(diagnostics.some(item => item.code === 'nginx.argument.invalid' && /Upstream address/.test(item.message)), value);
   }
@@ -242,6 +243,40 @@ test('proxy URLs and upstream addresses strictly validate bracketed IPv6', () =>
     assert.ok(validateNginxDocument(proxyDocument(`http://[::1]:${port}`)).some(item => item.code === 'nginx.argument.invalid'), `proxy port ${port}`);
     assert.ok(validateNginxDocument(upstreamDocument(`[::1]:${port}`)).some(item => item.code === 'nginx.argument.invalid'), `upstream port ${port}`);
   }
+});
+
+test('Phase 2 directives remain constrained to trusted contexts and argument grammars', () => {
+  const tlsSource = {kind: 'capability', id: 'tls', version: '2.0.0'};
+  const valid = {profile: 'site-fragment', source, children: [block('server', [], [
+    directive('listen', [arg.integer(443), arg.keyword('ssl')], tlsSource),
+    directive('server_name', [arg.domain('secure.example.com')], source),
+    directive('ssl_certificate', [arg.filePath('/etc/nginx/cert.pem')], tlsSource),
+    directive('ssl_certificate_key', [arg.filePath('/etc/nginx/private/key.pem')], tlsSource),
+    directive('ssl_protocols', [arg.keyword('TLSv1.2'), arg.keyword('TLSv1.3')], tlsSource),
+  ], tlsSource)]};
+  assert.equal(serializeNginxDocument(valid).ok, true);
+
+  const unsafe = structuredClone(valid);
+  unsafe.children[0].children[2].args[0].value = '/etc/nginx/*.pem';
+  assert.ok(validateNginxDocument(unsafe).some(item => item.code === 'nginx.argument.invalid'));
+
+  const invalidContext = {profile: 'full-config', source, children: [
+    block('events', [], [directive('ssl_certificate', [arg.filePath('/etc/nginx/cert.pem')], tlsSource)], source),
+    block('http', [], [], source),
+  ]};
+  assert.ok(validateNginxDocument(invalidContext).some(item => item.code === 'nginx.directive.context'));
+});
+
+test('HTTP fragments validate map placement without introducing a third document profile', () => {
+  const websocketSource = {kind: 'capability', id: 'websocket', version: '2.0.0'};
+  const result = serializeNginxHttpFragment([block('map', [arg.variable('$http_upgrade'), arg.variable('$connection_upgrade')], [
+    mapEntry(arg.keyword('default'), arg.literal('upgrade'), websocketSource),
+    mapEntry(arg.quoted(''), arg.literal('close'), websocketSource),
+  ], websocketSource)]);
+  assert.equal(result.ok, true);
+  assert.equal(result.artifacts[0]?.filename, 'http-shared.conf');
+  assert.match(result.artifacts[0]?.content ?? '', /^map \$http_upgrade \$connection_upgrade \{/);
+  assert.match(result.artifacts[0]?.content ?? '', /"" close;/);
 });
 
 test('location headers accept literal prefixes and reject unsupported matching semantics', () => {

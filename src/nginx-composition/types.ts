@@ -1,0 +1,172 @@
+import type {Diagnostic, OutputArtifact, ValidationSummary} from '../core/types.js';
+import type {DirectiveNode, NginxNode, NginxOutputProfile, NginxSourceProvenance} from '../nginx-syntax/types.js';
+
+export type NginxCapabilityId = 'reverse-proxy' | 'routing' | 'tls' | 'websocket';
+export type NginxModule = 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
+
+export interface CapabilityInputFieldSchema {
+  readonly name: string;
+  readonly type: 'string' | 'integer' | 'boolean' | 'enum' | 'array';
+  readonly required: boolean;
+  readonly description: string;
+  readonly values?: readonly string[];
+  readonly maximumItems?: number;
+}
+
+export interface CapabilityInputSchema {
+  readonly version: string;
+  readonly additionalProperties: false;
+  readonly fields: readonly CapabilityInputFieldSchema[];
+}
+
+export interface CapabilityRequirement {
+  readonly minimumNginxVersion: string;
+  readonly modules: readonly NginxModule[];
+}
+
+export interface CapabilityAstSurface {
+  readonly contexts: readonly ('http' | 'server' | 'location')[];
+  readonly directives: readonly string[];
+  readonly blocks: readonly ('map' | 'server' | 'location')[];
+}
+
+export interface CapabilityValidationSuccess<TInput> {
+  readonly ok: true;
+  readonly value: TInput;
+  readonly diagnostics: readonly [];
+}
+
+export interface CapabilityValidationFailure {
+  readonly ok: false;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+export type CapabilityValidation<TInput> = CapabilityValidationSuccess<TInput> | CapabilityValidationFailure;
+
+export interface PlannedRoute {
+  readonly prefix: string;
+  readonly targetHost: string;
+  readonly targetPort: number;
+  readonly forwarding: 'preserve-prefix' | 'strip-prefix';
+  readonly source: NginxSourceProvenance;
+}
+
+export interface TlsContribution {
+  readonly directives: readonly DirectiveNode[];
+  readonly redirectHttp: boolean;
+  readonly source: NginxSourceProvenance;
+}
+
+export interface CapabilityContribution {
+  readonly domain?: string;
+  readonly routes?: readonly PlannedRoute[];
+  readonly tls?: TlsContribution;
+  readonly websocketRoutes?: readonly string[];
+  readonly sharedHttpNodes?: readonly NginxNode[];
+  readonly prerequisites?: readonly CompositionPrerequisite[];
+  readonly explanations?: readonly CompositionExplanation[];
+}
+
+export interface NginxCapabilityDefinition<TInput = unknown> {
+  readonly id: NginxCapabilityId;
+  readonly version: string;
+  readonly inputSchema: CapabilityInputSchema;
+  readonly dependencies: readonly NginxCapabilityId[];
+  readonly incompatibleWith: readonly NginxCapabilityId[];
+  readonly astSurface: CapabilityAstSurface;
+  requirements(input: TInput): CapabilityRequirement;
+  validate(input: unknown, path: string): CapabilityValidation<TInput>;
+  contribute(input: TInput): CapabilityContribution;
+}
+
+export interface CapabilitySelection {
+  readonly id: string;
+  readonly input: unknown;
+}
+
+export interface NginxTarget {
+  readonly version: string;
+  readonly modules: readonly string[];
+}
+
+export interface NginxCompositionRequest {
+  readonly profile: NginxOutputProfile;
+  readonly target: NginxTarget;
+  readonly capabilities: readonly CapabilitySelection[];
+}
+
+export interface CompositionExplanation {
+  readonly code: string;
+  readonly capabilityId: NginxCapabilityId;
+  readonly message: string;
+  readonly context: 'http' | 'server' | 'location' | 'artifact';
+  readonly semanticIdentity?: string;
+}
+
+export interface CompositionPrerequisite {
+  readonly code: string;
+  readonly capabilityId: NginxCapabilityId;
+  readonly kind: 'file' | 'module' | 'operator-action' | 'service';
+  readonly description: string;
+  readonly path?: string;
+}
+
+export interface NginxCompositionSuccess {
+  readonly ok: true;
+  readonly artifacts: readonly OutputArtifact[];
+  readonly diagnostics: readonly Diagnostic[];
+  readonly explanations: readonly CompositionExplanation[];
+  readonly prerequisites: readonly CompositionPrerequisite[];
+  readonly validation: ValidationSummary;
+  readonly provenance: {
+    readonly generatedBy: 'Forge';
+    readonly engine: 'nginx-capability-composition';
+    readonly version: '2.0.0';
+    readonly deterministic: true;
+    readonly capabilities: readonly {readonly id: NginxCapabilityId; readonly version: string}[];
+  };
+}
+
+export interface NginxCompositionFailure {
+  readonly ok: false;
+  readonly artifacts: readonly [];
+  readonly diagnostics: readonly Diagnostic[];
+  readonly explanations: readonly CompositionExplanation[];
+  readonly prerequisites: readonly CompositionPrerequisite[];
+  readonly validation: ValidationSummary;
+  readonly provenance: NginxCompositionSuccess['provenance'];
+}
+
+export type NginxCompositionOutcome = NginxCompositionSuccess | NginxCompositionFailure;
+
+export interface ReverseProxyInput {
+  readonly domain: string;
+  readonly targetHost: string;
+  readonly targetPort: number;
+}
+
+export interface RouteInput {
+  readonly prefix: string;
+  readonly targetHost: string;
+  readonly targetPort: number;
+  readonly forwarding: 'preserve-prefix' | 'strip-prefix';
+}
+
+export interface RoutingInput {
+  readonly routes: readonly RouteInput[];
+}
+
+export interface TlsInput {
+  readonly certificatePath: string;
+  readonly privateKeyPath: string;
+  readonly redirectHttp: boolean;
+}
+
+export interface WebSocketInput {
+  readonly routes: readonly string[];
+}
+
+export interface DependencyNode {
+  readonly id: string;
+  readonly dependencies: readonly string[];
+}

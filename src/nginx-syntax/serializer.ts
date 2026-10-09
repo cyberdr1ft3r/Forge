@@ -1,7 +1,7 @@
 import {argumentIdentity, serializeArgument} from './arguments.js';
 import {getBlockDefinition, getDirectiveDefinition} from './registry.js';
 import type {BlockNode, DirectiveNode, MapEntryNode, NginxDocument, NginxNode} from './types.js';
-import {validateNginxDocument} from './validator.js';
+import {validateNginxDocument, validateNginxHttpFragment} from './validator.js';
 import type {NginxCompilation} from './types.js';
 
 function nodeSortKey(node: NginxNode): string {
@@ -61,6 +61,23 @@ export function serializeNginxDocument(document: unknown): NginxCompilation {
       mediaType: 'text/nginx',
       role: 'primary',
       content: render(validDocument),
+    }],
+    diagnostics,
+  };
+}
+
+export function serializeNginxHttpFragment(children: unknown): NginxCompilation {
+  const diagnostics = validateNginxHttpFragment(children);
+  if (diagnostics.some(item => item.severity === 'error')) return {ok: false, artifacts: [], diagnostics};
+  const nodes = children as readonly NginxNode[];
+  return {
+    ok: true,
+    artifacts: [{
+      id: 'nginx-http-shared',
+      filename: 'http-shared.conf',
+      mediaType: 'text/nginx',
+      role: 'primary',
+      content: `${[...nodes].sort((left, right) => nodeSortKey(left).localeCompare(nodeSortKey(right), 'en')).map(node => serializeNode(node, 0)).join('\n\n')}\n`,
     }],
     diagnostics,
   };

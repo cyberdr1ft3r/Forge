@@ -191,3 +191,11 @@ export function validateNginxDocument(document: unknown): readonly Diagnostic[] 
   }
   return diagnostics;
 }
+
+export function validateNginxHttpFragment(children: unknown): readonly Diagnostic[] {
+  if (!Array.isArray(children)) return [error('nginx.fragment.children', 'HTTP fragment children must be an array.', 'fragment.children')];
+  const diagnostics: Diagnostic[] = children.length === 0 ? [error('nginx.fragment.empty', 'HTTP fragment requires at least one node.', 'fragment.children')] : [];
+  diagnostics.push(...validateSiblingConflicts(children, 'http', 'fragment.children'));
+  children.forEach((node, index) => diagnostics.push(...validateNode(node, 'http', `fragment.children[${index}]`)));
+  return diagnostics;
+}

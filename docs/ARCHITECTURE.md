@@ -47,6 +47,8 @@ The result uses an artifact array today so a later issue can add related files w
 
 Issue #14 Phase 1 adds an Nginx-specific typed syntax engine under `src/nginx-syntax/`. It consumes typed AST nodes, validates them against a closed directive/block registry, and emits normal Forge artifacts for either a complete `nginx.conf` or a server-only site fragment. Its diagnostics use the existing Forge diagnostic shape at the static tier. It does not register a new generator, change the legacy Nginx output, implement capability shelves, or claim native parser validation. See [`NGINX_SYNTAX_ENGINE_PHASE1.md`](NGINX_SYNTAX_ENGINE_PHASE1.md) for integration and security boundaries.
 
+Issue #14 Phase 2 adds the backend capability planner under `src/nginx-composition/`. Four immutable, versioned definitions—reverse proxy, routing, TLS/redirect, and WebSocket—validate untrusted capability input, resolve dependencies and target requirements, merge semantic contributions, then materialize the Phase 1 AST. Full configurations contain shared HTTP resources directly; site fragments emit a separate supporting HTTP-context artifact when required. The legacy generator and browser UI remain unchanged. See [`NGINX_CAPABILITY_COMPOSITION_PHASE2.md`](NGINX_CAPABILITY_COMPOSITION_PHASE2.md) for the contract, security controls, and limitations.
+
 ## Manifest and versioning
 
 Every manifest declares:
