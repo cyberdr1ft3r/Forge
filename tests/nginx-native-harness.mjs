@@ -60,8 +60,8 @@ function dockerSecurityArguments() {
     '--user', `${uid}:${gid}`,
     '--read-only', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5',
     '--tmpfs', '/tmp:rw,noexec,nosuid,mode=1777,size=16m',
-    '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,size=16m',
-    '--tmpfs', '/var/run:rw,noexec,nosuid,size=4m',
+    '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,mode=1777,size=16m',
+    '--tmpfs', '/var/run:rw,noexec,nosuid,mode=1777,size=4m',
   ];
 }
 
