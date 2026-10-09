@@ -82,7 +82,8 @@ test('HTTPS redirect creates a separate HTTP server tied to the TLS listener', (
   assert.equal(result.ok, true);
   const content = result.artifacts[0]?.content ?? '';
   assert.match(content, /listen 80;/);
-  assert.match(content, /return 301 https:\/\/\$host\$request_uri;/);
+  assert.match(content, /return 301 https:\/\/app\.example\.com\$request_uri;/);
+  assert.doesNotMatch(content, /https:\/\/\$host/);
   assert.match(content, /listen 443 ssl;/);
   assert.equal((content.match(/proxy_pass /g) ?? []).length, 1);
   assert.ok(result.explanations.some(item => item.code === 'composition.tls.redirect'));
