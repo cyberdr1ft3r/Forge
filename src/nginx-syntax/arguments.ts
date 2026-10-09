@@ -109,6 +109,10 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return validPath(value) ? undefined : 'Path must be absolute, bounded, traversal-free, and contain only safe path or glob characters.';
     case 'file-path':
       return validFilePath(value) ? undefined : 'File path must be absolute, bounded, traversal-free, and contain no whitespace, globs, or empty segments.';
+    case 'redirect-url': {
+      const match = /^https:\/\/([a-z0-9.-]+)\$request_uri$/.exec(value);
+      return match !== null && validDomain(match[1] ?? '') ? undefined : 'Redirect URL must use a validated HTTPS domain followed by the literal $request_uri variable.';
+    }
     case 'proxy-url':
       return validProxyUrl(value) ? undefined : 'Proxy URL must be a literal http:// or https:// URL with a valid host, optional port, and safe path.';
     case 'upstream-address':
