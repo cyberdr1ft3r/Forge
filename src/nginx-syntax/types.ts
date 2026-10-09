@@ -114,6 +114,7 @@ export const nginxArgument = Object.freeze({
   path: (value: string): NginxArgument => ({kind: 'path', value}),
   filePath: (value: string): NginxArgument => ({kind: 'file-path', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
+  redirectUrl: (value: string): NginxArgument => ({kind: 'redirect-url', value}),
   upstreamAddress: (value: string): NginxArgument => ({kind: 'upstream-address', value}),
   locationPrefix: (value: string): NginxArgument => ({kind: 'location-prefix', value}),
   variable: (value: KnownNginxVariable): NginxArgument => ({kind: 'variable', value}),
