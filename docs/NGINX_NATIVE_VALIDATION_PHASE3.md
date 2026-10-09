@@ -6,7 +6,7 @@ Phase 3 adds independent native-parser evidence for the Phase 1 syntax engine an
 
 `tests/nginx-native-harness.mjs` is an explicitly invoked Linux CI harness. It:
 
-1. accepts only a patch-pinned official image reference in the form `nginx:x.y.z`, optionally with an immutable SHA-256 manifest digest;
+1. accepts only a patch-version-constrained official image reference in the form `nginx:x.y.z`, optionally with an immutable SHA-256 manifest digest;
 2. pulls the image and records its resolved repository digest;
 3. captures `nginx -v` and `nginx -V`, confirms the binary version matches the tag, and fails closed if required module evidence is absent;
 4. asks `composeNginxCapabilities()` to produce every positive artifact;
@@ -20,7 +20,7 @@ The harness never accepts a command, configuration snippet, or container option 
 
 ## Compatibility matrix
 
-CI runs the same fixture inventory against these official patch-tagged images:
+CI runs the same fixture inventory against these immutable-digest-pinned official images:
 
 | Image | Version line | Expected module evidence |
 | --- | --- | --- |
@@ -89,7 +89,7 @@ npm run test:native:nginx -- --image nginx:1.24.0 --report native-validation-rep
 npm run test:native:nginx -- --image nginx:1.26.3 --report native-validation-report.json
 ```
 
-The command intentionally refuses unpinned tags and non-Linux hosts. It pulls the selected image, so reproduction requires registry access. The report contains parser output and compatibility evidence, not certificate contents or the private key.
+Local/manual runs accept an exact patch tag such as `nginx:1.24.0`, optionally followed by an immutable `@sha256:` digest. Floating tags such as `latest`, `1`, or `1.26` are rejected, as are non-Linux hosts. A tag-only local run is patch-version constrained but does not provide immutable image provenance; supply a digest when byte-identical image provenance is required. CI compatibility evidence always uses immutable-digest-pinned references. The harness pulls the selected image, so reproduction requires registry access. The report contains parser output and compatibility evidence, not certificate contents or the private key.
 
 ## Limitations and follow-up
 
