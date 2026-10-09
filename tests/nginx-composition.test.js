@@ -7,11 +7,18 @@ import {
   mergeSharedHttpResources,
   resolveCapabilityOrder,
 } from '../dist/nginx-composition/index.js';
-import {block, mapEntry, nginxArgument as arg} from '../dist/nginx-syntax/index.js';
+import {
+  block,
+  directive,
+  FORGE_JSON_LOG_FORMAT_NAME,
+  FORGE_JSON_LOG_FORMAT_TEMPLATE,
+  mapEntry,
+  nginxArgument as arg,
+} from '../dist/nginx-syntax/index.js';
 
 const target = {
   version: '1.24.0',
-  modules: ['http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
+  modules: ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
 };
 
 const reverseProxy = {
@@ -64,6 +71,17 @@ const routing = {
   ]},
 };
 
+const logging = (overrides = {}) => ({
+  id: 'logging',
+  input: {
+    accessLog: 'combined',
+    accessLogPath: '/var/log/nginx/app.access.log',
+    errorLogPath: '/var/log/nginx/app.error.log',
+    errorLogLevel: 'error',
+    ...overrides,
+  },
+});
+
 const compose = (capabilities, profile = 'full-config', selectedTarget = target) => composeNginxCapabilities({profile, target: selectedTarget, capabilities});
 const siteProxy = (id, domain, port = 3000) => ({id, capabilities: [{id: 'reverse-proxy', input: {domain, targetHost: '127.0.0.1', targetPort: port}}]});
 const composeSites = (sites, profile = 'full-config') => composeNginxSites({profile, target, sites});
@@ -76,7 +94,7 @@ test('multi-site API is additive and keeps legacy single-site artifacts byte-ide
 
   const multi = composeSites([siteProxy('app', 'app.example.com')]);
   assert.equal(multi.ok, true);
-  assert.equal(multi.provenance.version, '2.2.0');
+  assert.equal(multi.provenance.version, '2.3.0');
   assert.deepEqual(multi.provenance.sites, ['app']);
   assert.equal(multi.artifacts[0].content, before.artifacts[0].content);
 });
@@ -175,11 +193,140 @@ test('multi-site expansion remains bounded', () => {
 
 test('capability registry is typed, versioned, immutable, and includes the Phase 4 shelves', () => {
   const definitions = listCapabilityDefinitions();
-  assert.deepEqual(definitions.map(item => item.id).sort(), ['reverse-proxy', 'routing', 'static-site', 'tls', 'upstream-load-balancing', 'websocket']);
+  assert.deepEqual(definitions.map(item => item.id).sort(), ['logging', 'reverse-proxy', 'routing', 'static-site', 'tls', 'upstream-load-balancing', 'websocket']);
   assert.ok(definitions.every(item => /^\d+\.\d+\.\d+$/.test(item.version)));
   assert.ok(definitions.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(definitions.every(item => item.astSurface.contexts.length > 0));
   assert.throws(() => { definitions[0].dependencies.push('tls'); }, TypeError);
+});
+
+test('logging is opt-in and preserves existing composition output byte for byte', () => {
+  const baseline = compose([reverseProxy]);
+  const repeated = compose([reverseProxy]);
+  assert.equal(baseline.ok, true);
+  assert.deepEqual(repeated.artifacts, baseline.artifacts);
+  assert.doesNotMatch(baseline.artifacts[0].content, /(?:access_log|error_log|log_format)/);
+});
+
+test('logging emits explicit per-site access and error policy with operational prerequisites', () => {
+  const result = compose([reverseProxy, logging({errorLogLevel: 'warn'})]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /access_log \/var\/log\/nginx\/app\.access\.log combined;/);
+  assert.match(content, /error_log \/var\/log\/nginx\/app\.error\.log warn;/);
+  assert.doesNotMatch(content, /log_format/);
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.logging.directory' && item.path === '/var/log/nginx'));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.logging.rotation'));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.logging.capacity'));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.logging.access-control'));
+});
+
+test('logging supports explicit disablement and every fixed non-debug error severity', () => {
+  const disabled = compose([reverseProxy, logging({accessLog: 'off', accessLogPath: undefined})]);
+  assert.equal(disabled.ok, true);
+  assert.match(disabled.artifacts[0].content, /access_log off;/);
+  assert.doesNotMatch(disabled.artifacts[0].content, /log_format/);
+
+  for (const level of ['info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg']) {
+    const result = compose([reverseProxy, logging({errorLogLevel: level})]);
+    assert.equal(result.ok, true, level);
+    assert.match(result.artifacts[0].content, new RegExp(`error_log /var/log/nginx/app\\.error\\.log ${level};`));
+  }
+});
+
+test('the JSON logging preset is fixed, namespaced, escaped by Nginx, and credential-free', () => {
+  const result = compose([reverseProxy, logging({accessLog: 'forge-json'})]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.equal((content.match(/log_format forge_json_v1/g) ?? []).length, 1);
+  assert.match(content, new RegExp(`log_format ${FORGE_JSON_LOG_FORMAT_NAME} escape=json`));
+  assert.ok(content.includes(`'${FORGE_JSON_LOG_FORMAT_TEMPLATE}'`));
+  assert.match(content, /access_log \/var\/log\/nginx\/app\.access\.log forge_json_v1;/);
+  assert.doesNotMatch(FORGE_JSON_LOG_FORMAT_TEMPLATE, /(?:authorization|cookie|request_body|request_uri|args)/i);
+});
+
+test('logging composes with static, TLS redirect, WebSocket, and upstream-owned sites', () => {
+  const staticResult = compose([staticSite(), logging({accessLog: 'off', accessLogPath: undefined})]);
+  assert.equal(staticResult.ok, true);
+  assert.match(staticResult.artifacts[0].content, /access_log off;/);
+
+  const tlsResult = compose([reverseProxy, tls, {...tls, input: {...tls.input, redirectHttp: true}}, logging()]);
+  assert.equal(tlsResult.ok, false, 'duplicate TLS selection remains rejected');
+  const redirected = compose([reverseProxy, {...tls, input: {...tls.input, redirectHttp: true}}, logging()]);
+  assert.equal(redirected.ok, true);
+  assert.equal((redirected.artifacts[0].content.match(/access_log \/var\/log\/nginx\/app\.access\.log combined;/g) ?? []).length, 2);
+  assert.equal((redirected.artifacts[0].content.match(/error_log \/var\/log\/nginx\/app\.error\.log error;/g) ?? []).length, 2);
+
+  const socket = compose([reverseProxy, websocket, logging({accessLog: 'forge-json'})]);
+  assert.equal(socket.ok, true);
+  const balanced = compose([upstreamProxy(), upstream(), logging()]);
+  assert.equal(balanced.ok, true);
+});
+
+test('multi-site logging deduplicates a shared JSON format and keeps site policy independent', () => {
+  const sites = [
+    {id: 'bravo', capabilities: [siteProxy('unused', 'bravo.example.com').capabilities[0], logging({accessLog: 'combined', accessLogPath: '/var/log/nginx/bravo.access.log', errorLogPath: '/var/log/nginx/bravo.error.log'})]},
+    {id: 'alpha', capabilities: [siteProxy('unused', 'alpha.example.com').capabilities[0], logging({accessLog: 'forge-json', accessLogPath: '/var/log/nginx/alpha.access.log', errorLogPath: '/var/log/nginx/alpha.error.log', errorLogLevel: 'notice'})]},
+    {id: 'charlie', capabilities: [siteProxy('unused', 'charlie.example.com').capabilities[0], logging({accessLog: 'forge-json', accessLogPath: '/var/log/nginx/charlie.access.log', errorLogPath: '/var/log/nginx/charlie.error.log'})]},
+  ];
+  const result = composeSites(sites);
+  const reordered = composeSites([...sites].reverse());
+  assert.equal(result.ok, true);
+  assert.deepEqual(reordered.artifacts, result.artifacts);
+  const content = result.artifacts[0].content;
+  assert.equal((content.match(/log_format forge_json_v1/g) ?? []).length, 1);
+  assert.match(content, /alpha\.access\.log forge_json_v1/);
+  assert.match(content, /bravo\.access\.log combined/);
+  assert.ok(result.explanations.some(item => item.code === 'composition.shared.dependencies' && item.siteIds?.join(',') === 'alpha,charlie'));
+
+  const fragments = composeSites(sites, 'site-fragment');
+  assert.equal(fragments.ok, true);
+  assert.deepEqual(fragments.artifacts.map(item => item.filename), ['site.conf', 'http-shared.conf']);
+  assert.match(fragments.artifacts[1].content, /log_format forge_json_v1/);
+});
+
+test('logging rejects malformed policy and unsafe paths before serialization', () => {
+  const invalidInputs = [
+    {accessLog: 'raw', accessLogPath: '/var/log/nginx/access.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'off', accessLogPath: '/var/log/nginx/access.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/same.log', errorLogPath: '/var/log/nginx/same.log'},
+    {accessLog: 'combined', accessLogPath: '../access.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/../access.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/*.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/$host.log', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/access.log;include', errorLogPath: '/var/log/nginx/error.log'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/access.log', errorLogPath: '/var/log/nginx/error.log\ninclude /tmp/x'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/access.log', errorLogPath: '/var/log/nginx/error.log', errorLogLevel: 'debug'},
+    {accessLog: 'combined', accessLogPath: '/var/log/nginx/access.log', errorLogPath: '/var/log/nginx/error.log', extra: true},
+  ];
+  for (const input of invalidInputs) {
+    const result = compose([reverseProxy, {id: 'logging', input}]);
+    assert.equal(result.ok, false, JSON.stringify(input));
+    assert.ok(result.diagnostics.some(item => item.stage === 'input'), JSON.stringify(result.diagnostics));
+  }
+
+  const owner = compose([{id: 'logging', input: logging().input}]);
+  assert.equal(owner.ok, false);
+  assert.ok(owner.diagnostics.some(item => item.code === 'composition.dependency.site-owner'));
+  const module = compose([reverseProxy, logging()], 'full-config', {...target, modules: ['http_proxy']});
+  assert.equal(module.ok, false);
+  assert.ok(module.diagnostics.some(item => item.code === 'composition.target.module-missing' && /http_log/.test(item.message)));
+});
+
+test('contradictory shared log-format identities fail closed', () => {
+  const source = {kind: 'capability', id: 'logging', version: '4.2.0'};
+  const format = value => directive('log_format', [
+    arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME),
+    arg.keyword('escape=json'),
+    {kind: 'log-format-template', value},
+  ], source);
+  const result = mergeSharedHttpResources([
+    {siteId: 'alpha', node: format(FORGE_JSON_LOG_FORMAT_TEMPLATE)},
+    {siteId: 'bravo', node: format(`${FORGE_JSON_LOG_FORMAT_TEMPLATE} `)},
+  ]);
+  assert.equal(result.ok, false);
+  assert.ok(result.diagnostics.some(item => item.code === 'composition.shared.conflict'));
 });
 
 test('upstream load balancing emits a trusted HTTP-level block and preserves proxy URI behavior', () => {

@@ -1,8 +1,8 @@
 import type {Diagnostic, OutputArtifact, ValidationSummary} from '../core/types.js';
 import type {DirectiveNode, NginxNode, NginxOutputProfile, NginxSourceProvenance} from '../nginx-syntax/types.js';
 
-export type NginxCapabilityId = 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'upstream-load-balancing' | 'websocket';
-export type NginxModule = 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
+export type NginxCapabilityId = 'logging' | 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'upstream-load-balancing' | 'websocket';
+export type NginxModule = 'http_log' | 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
 
 export interface CapabilityInputFieldSchema {
   readonly name: string;
@@ -65,6 +65,11 @@ export interface StaticSiteContribution {
   readonly source: NginxSourceProvenance;
 }
 
+export interface LoggingContribution {
+  readonly directives: readonly DirectiveNode[];
+  readonly source: NginxSourceProvenance;
+}
+
 export interface CapabilityContribution {
   readonly domain?: string;
   readonly routes?: readonly PlannedRoute[];
@@ -72,6 +77,7 @@ export interface CapabilityContribution {
   readonly websocketRoutes?: readonly string[];
   readonly sharedHttpNodes?: readonly NginxNode[];
   readonly staticSite?: StaticSiteContribution;
+  readonly logging?: LoggingContribution;
   readonly prerequisites?: readonly CompositionPrerequisite[];
   readonly explanations?: readonly CompositionExplanation[];
 }
@@ -147,7 +153,7 @@ export interface NginxCompositionSuccess {
   readonly provenance: {
     readonly generatedBy: 'Forge';
     readonly engine: 'nginx-capability-composition';
-    readonly version: '2.0.0' | '2.1.0' | '2.2.0';
+    readonly version: '2.0.0' | '2.1.0' | '2.2.0' | '2.3.0';
     readonly deterministic: true;
     readonly capabilities: readonly {readonly id: NginxCapabilityId; readonly version: string}[];
     readonly sites?: readonly string[];
@@ -224,6 +230,21 @@ export interface UpstreamLoadBalancingInput {
   readonly strategy: UpstreamLoadBalancingStrategy;
   readonly backends: readonly UpstreamBackendInput[];
 }
+
+export type AccessLogPreset = 'combined' | 'forge-json' | 'off';
+export type ErrorLogLevel = 'info' | 'notice' | 'warn' | 'error' | 'crit' | 'alert' | 'emerg';
+
+export type LoggingInput = {
+  readonly accessLog: Exclude<AccessLogPreset, 'off'>;
+  readonly accessLogPath: string;
+  readonly errorLogPath: string;
+  readonly errorLogLevel: ErrorLogLevel;
+} | {
+  readonly accessLog: 'off';
+  readonly accessLogPath?: never;
+  readonly errorLogPath: string;
+  readonly errorLogLevel: ErrorLogLevel;
+};
 
 export interface DependencyNode {
   readonly id: string;

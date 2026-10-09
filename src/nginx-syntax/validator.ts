@@ -145,6 +145,15 @@ function validateNode(node: unknown, parent: NginxContext, path: string): readon
     if (definition === undefined) return [...diagnostics, error('nginx.directive.unsupported', `Unsupported directive: ${String((candidate as {name?: unknown}).name)}.`, `${path}.name`)];
     if (!definition.contexts.includes(parent)) diagnostics.push(error('nginx.directive.context', `${definition.nginxName} is not allowed in ${parent} context.`, path));
     diagnostics.push(...validateArguments((candidate as {args?: unknown}).args, definition.arguments, `${path}.args`));
+    if (definition.id === 'access_log' && Array.isArray((candidate as {args?: unknown}).args)) {
+      const args = (candidate as {args: readonly unknown[]}).args;
+      const first = args[0] as {kind?: unknown; value?: unknown} | undefined;
+      if (first?.kind === 'keyword' && first.value === 'off' && args.length !== 1) {
+        diagnostics.push(error('nginx.access-log.off-arguments', 'access_log off cannot include a destination or format.', `${path}.args`));
+      } else if (first?.kind === 'file-path' && args.length !== 2) {
+        diagnostics.push(error('nginx.access-log.format-required', 'A file-backed access_log must explicitly select a trusted format.', `${path}.args`));
+      }
+    }
     if (definition.id === 'upstream_server' && Array.isArray((candidate as {args?: unknown}).args)) {
       const values = ((candidate as {args: readonly unknown[]}).args).slice(1).map(argumentValueIdentity);
       const parameterKeys = new Map<string, number>();

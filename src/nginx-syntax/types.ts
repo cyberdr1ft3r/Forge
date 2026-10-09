@@ -12,6 +12,8 @@ export type NginxArgumentKind =
   | 'path'
   | 'file-path'
   | 'index-file'
+  | 'log-format-name'
+  | 'log-format-template'
   | 'proxy-url'
   | 'upstream-url'
   | 'redirect-url'
@@ -49,6 +51,7 @@ export type NginxArgument =
   | {readonly kind: Exclude<NginxArgumentKind, 'integer' | 'variable'>; readonly value: string};
 
 export type KnownDirectiveName =
+  | 'access_log'
   | 'daemon'
   | 'default_type'
   | 'error_log'
@@ -57,6 +60,7 @@ export type KnownDirectiveName =
   | 'keepalive'
   | 'least_conn'
   | 'listen'
+  | 'log_format'
   | 'pid'
   | 'proxy_pass'
   | 'proxy_http_version'
@@ -118,6 +122,9 @@ export interface NginxCompilationFailure {
 
 export type NginxCompilation = NginxCompilationSuccess | NginxCompilationFailure;
 
+export const FORGE_JSON_LOG_FORMAT_NAME = 'forge_json_v1';
+export const FORGE_JSON_LOG_FORMAT_TEMPLATE = '{"time":"$time_iso8601","remote_addr":"$remote_addr","host":"$host","method":"$request_method","uri":"$uri","status":$status,"bytes_sent":$body_bytes_sent,"request_time":$request_time}';
+
 export const nginxArgument = Object.freeze({
   literal: (value: string): NginxArgument => ({kind: 'literal', value}),
   identifier: (value: string): NginxArgument => ({kind: 'identifier', value}),
@@ -127,6 +134,8 @@ export const nginxArgument = Object.freeze({
   path: (value: string): NginxArgument => ({kind: 'path', value}),
   filePath: (value: string): NginxArgument => ({kind: 'file-path', value}),
   indexFile: (value: string): NginxArgument => ({kind: 'index-file', value}),
+  logFormatName: (value: string): NginxArgument => ({kind: 'log-format-name', value}),
+  logFormatTemplate: (value: string): NginxArgument => ({kind: 'log-format-template', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
   upstreamUrl: (value: string): NginxArgument => ({kind: 'upstream-url', value}),
   redirectUrl: (value: string): NginxArgument => ({kind: 'redirect-url', value}),

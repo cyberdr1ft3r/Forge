@@ -9,7 +9,7 @@ const PROCESS_TIMEOUT_MS = 30_000;
 const PULL_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const OFFICIAL_IMAGE = /^nginx:(\d+\.\d+\.\d+)(?:@sha256:[a-f0-9]{64})?$/;
-const REQUIRED_MODULES = ['http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
+const REQUIRED_MODULES = ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
 
 function parseArguments(argv) {
   const result = {image: undefined, report: undefined};
@@ -128,6 +128,15 @@ function upstreamCapability(upstreamId = 'app-pool', strategy = 'round-robin', b
   return {id: 'upstream-load-balancing', input: {upstreamId, strategy, backends}};
 }
 
+function loggingCapability(name, accessLog = 'combined', errorLogLevel = 'error') {
+  return {id: 'logging', input: {
+    accessLog,
+    ...(accessLog === 'off' ? {} : {accessLogPath: `/tmp/${name}.access.log`}),
+    errorLogPath: `/tmp/${name}.error.log`,
+    errorLogLevel,
+  }};
+}
+
 async function materializePositive(root, version) {
   const definitions = [
     ['http-reverse-proxy', [proxy], 'full-config'],
@@ -152,6 +161,13 @@ async function materializePositive(root, version) {
   const reordered = compose(compositionRequest(version, [websocketRoutes, tls(true), routing, proxy]), 'determinism-b');
   assert.deepEqual(reordered.artifacts, ordered.artifacts, 'Equivalent selection orders must emit byte-identical artifacts');
   fixtures.push({...await materializeComposition(root, 'selection-order-determinism', ordered, 'full-config'), source: 'forge-composition-output', equivalentSelectionOrderVerified: true});
+
+  const loggingCombined = loggingCapability('logging-combined', 'combined', 'warn');
+  const loggingJson = loggingCapability('logging-json', 'forge-json', 'notice');
+  fixtures.push({...await materializeComposition(root, 'logging-combined', compose(compositionRequest(version, [proxy, loggingCombined]), 'logging-combined'), 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-off', compose(compositionRequest(version, [proxy, loggingCapability('logging-off', 'off', 'crit')]), 'logging-off'), 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-json', compose(compositionRequest(version, [proxy, loggingJson]), 'logging-json'), 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-tls-websocket', compose(compositionRequest(version, [proxy, websocketRoot, tls(true), loggingCapability('logging-tls-websocket', 'forge-json')]), 'logging-tls-websocket'), 'full-config'), source: 'forge-logging-output'});
 
   const httpSites = [nativeSite('alpha', 'alpha.example.com', 3101), nativeSite('bravo', 'bravo.example.com', 3102)];
   const multiHttp = composeSites(multiRequest(version, httpSites), 'multi-http-sites');
@@ -191,6 +207,7 @@ async function materializePositive(root, version) {
   const staticProxySites = [multiStaticSites[0], nativeSite('proxy-alongside-static', 'proxy-alongside-static.example.com', 3601)];
   fixtures.push({...await materializeComposition(root, 'static-and-proxy', composeSites(multiRequest(version, staticProxySites), 'static-and-proxy'), 'full-config'), source: 'forge-static-site-output'});
   fixtures.push({...await materializeComposition(root, 'static-and-tls', compose(compositionRequest(version, [staticStandard, tls(false)]), 'static-and-tls'), 'full-config'), source: 'forge-static-site-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-static', compose(compositionRequest(version, [staticStandard, loggingCapability('logging-static', 'combined', 'info')]), 'logging-static'), 'full-config'), source: 'forge-logging-output'});
 
   const staticSocketSites = [multiStaticSites[0], nativeSite('socket-alongside-static', 'socket-alongside-static.example.com', 3602, [websocketRoot])];
   fixtures.push({...await materializeComposition(root, 'static-and-websocket-proxy', composeSites(multiRequest(version, staticSocketSites), 'static-and-websocket-proxy'), 'full-config'), source: 'forge-static-site-output'});
@@ -211,6 +228,7 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'upstream-weighted-round-robin', compose(compositionRequest(version, [balancedProxy, roundRobin]), 'upstream-weighted-round-robin'), 'full-config'), source: 'forge-upstream-output'});
   fixtures.push({...await materializeComposition(root, 'upstream-least-connections', compose(compositionRequest(version, [upstreamProxy('least.example.com', 'least-pool'), leastConnections]), 'upstream-least-connections'), 'full-config'), source: 'forge-upstream-output'});
   fixtures.push({...await materializeComposition(root, 'upstream-tls-websocket', compose(compositionRequest(version, [balancedProxy, roundRobin, tls(false), websocketRoot]), 'upstream-tls-websocket'), 'full-config'), source: 'forge-upstream-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-upstream', compose(compositionRequest(version, [balancedProxy, roundRobin, loggingCapability('logging-upstream', 'forge-json', 'alert')]), 'logging-upstream'), 'full-config'), source: 'forge-logging-output'});
   fixtures.push({...await materializeComposition(root, 'upstream-site-fragment-bundle', compose(compositionRequest(version, [balancedProxy, roundRobin], 'site-fragment'), 'upstream-site-fragment-bundle'), 'site-fragment'), source: 'forge-upstream-output'});
 
   const sharedUpstreamSites = [
@@ -227,6 +245,16 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'multi-distinct-upstreams', composeSites(multiRequest(version, distinctUpstreamSites), 'multi-distinct-upstreams'), 'full-config'), source: 'forge-upstream-output'});
   fixtures.push({...await materializeComposition(root, 'static-and-balanced-proxy', composeSites(multiRequest(version, [multiStaticSites[0], sharedUpstreamSites[0]]), 'static-and-balanced-proxy'), 'full-config'), source: 'forge-upstream-output'});
 
+  const loggedSites = [
+    nativeSite('logged-alpha', 'logged-alpha.example.com', 4501, [loggingCapability('logged-alpha', 'forge-json')]),
+    nativeSite('logged-bravo', 'logged-bravo.example.com', 4502, [loggingCapability('logged-bravo', 'forge-json', 'emerg')]),
+    nativeSite('logged-charlie', 'logged-charlie.example.com', 4503, [loggingCapability('logged-charlie', 'combined')]),
+  ];
+  const multiLogging = composeSites(multiRequest(version, loggedSites), 'multi-logging');
+  assert.equal((multiLogging.artifacts[0].content.match(/log_format forge_json_v1/g) ?? []).length, 1, 'shared JSON log format must be emitted once');
+  fixtures.push({...await materializeComposition(root, 'multi-logging', multiLogging, 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'logging-site-fragment-bundle', composeSites(multiRequest(version, loggedSites, 'site-fragment'), 'logging-site-fragment-bundle'), 'site-fragment'), source: 'forge-logging-output'});
+
   const missingUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy]));
   assert.equal(missingUpstream.ok, false, 'Forge must reject unresolved upstream references');
   const unsafeUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy, upstreamCapability('app-pool', 'round-robin', [{host: '127.0.0.1;include', port: 4101}, {host: '127.0.0.1', port: 4102}])]));
@@ -238,6 +266,12 @@ async function materializePositive(root, version) {
     {id: 'balanced-conflict', capabilities: [upstreamProxy('balanced-conflict.example.com'), upstreamCapability('app-pool', 'round-robin', [{host: '127.0.0.1', port: 4301}, {host: '127.0.0.1', port: 4302}])]},
   ]));
   assert.equal(contradictoryUpstreams.ok, false, 'Forge must reject contradictory shared upstream definitions');
+  const unsafeLogPath = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'logging', input: {accessLog: 'combined', accessLogPath: '/tmp/../escape.log', errorLogPath: '/tmp/error.log'}}]));
+  assert.equal(unsafeLogPath.ok, false, 'Forge must reject traversal in log paths');
+  const unsafeLogVariable = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'logging', input: {accessLog: 'combined', accessLogPath: '/tmp/$host.log', errorLogPath: '/tmp/error.log'}}]));
+  assert.equal(unsafeLogVariable.ok, false, 'Forge must reject variables in log paths');
+  const unsupportedLogLevel = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'logging', input: {accessLog: 'off', errorLogPath: '/tmp/error.log', errorLogLevel: 'debug'}}]));
+  assert.equal(unsupportedLogLevel.ok, false, 'Forge must reject unsupported debug logging');
 
   const duplicate = composeNginxSites(multiRequest(version, [nativeSite('one', 'duplicate.example.com', 3501), nativeSite('two', 'duplicate.example.com', 3502)]));
   assert.equal(duplicate.ok, false, 'Forge must reject duplicate listener/server-name ownership');
@@ -263,6 +297,9 @@ async function materializePositive(root, version) {
     unsafeUpstreamRejected: true,
     unsupportedUpstreamStrategyRejected: true,
     contradictorySharedUpstreamRejected: true,
+    unsafeLogPathRejected: true,
+    unsafeLogVariableRejected: true,
+    unsupportedLogLevelRejected: true,
   }};
 }
 
@@ -335,6 +372,31 @@ async function materializeNegative(root, generated) {
       mutate: content => content.replace('    server {', '    upstream forge_app_pool { server 127.0.0.1:4999; }\n\n    server {'),
       expected: ['duplicate upstream "forge_app_pool"'],
     },
+    {
+      name: 'invalid-access-log-context', source: 'logging-combined',
+      mutate: content => content.replace('events {', 'events {\n    access_log /tmp/invalid.access.log combined;'),
+      expected: ['"access_log" directive is not allowed here'],
+    },
+    {
+      name: 'invalid-error-log-level', source: 'logging-combined',
+      mutate: content => content.replace('error_log /tmp/logging-combined.error.log warn;', 'error_log /tmp/logging-combined.error.log verbose;'),
+      expected: ['invalid log level'],
+    },
+    {
+      name: 'unknown-access-log-format', source: 'logging-json',
+      mutate: content => content.replace('forge_json_v1;', 'missing_format;'),
+      expected: ['unknown log format "missing_format"'],
+    },
+    {
+      name: 'malformed-log-format', source: 'logging-json',
+      mutate: content => content.replace('log_format forge_json_v1 escape=json', 'log_format'),
+      expected: ['invalid number of arguments in "log_format" directive'],
+    },
+    {
+      name: 'duplicate-log-format-name', source: 'logging-json',
+      mutate: content => content.replace('    server {', '    log_format forge_json_v1 escape=json \'duplicate\';\n\n    server {'),
+      expected: ['duplicate "log_format" name "forge_json_v1"'],
+    },
   ];
   const fixtures = [];
   for (const mutation of mutations) {
@@ -375,6 +437,7 @@ function configureChecks(versionOutput, configureOutput, expectedVersion) {
     {id: 'http_proxy', verified: !hasFlag('--without-http_proxy_module'), evidence: 'no --without-http_proxy_module configure flag'},
     {id: 'http_map', verified: !hasFlag('--without-http_map_module'), evidence: 'no --without-http_map_module configure flag'},
     {id: 'http_rewrite', verified: !hasFlag('--without-http_rewrite_module'), evidence: 'no --without-http_rewrite_module configure flag'},
+    {id: 'http_log', verified: !hasFlag('--without-http_log_module'), evidence: 'no --without-http_log_module configure flag'},
   ];
   const unavailable = checks.filter(item => !item.verified);
   assert.deepEqual(unavailable, [], `Required Nginx modules cannot be verified: ${JSON.stringify(unavailable)}`);

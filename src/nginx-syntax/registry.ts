@@ -35,10 +35,11 @@ function deepFreeze<T>(value: T): T {
 }
 
 const directives = deepFreeze({
+  access_log: {id: 'access_log', nginxName: 'access_log', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['file-path', 'keyword'], keywords: ['off']}, {kinds: ['log-format-name', 'keyword'], optional: true, keywords: ['combined']}], repeatability: 'single', order: 36},
   daemon: {id: 'daemon', nginxName: 'daemon', contexts: ['main'], arguments: [{kinds: ['keyword'], keywords: ['on', 'off']}], repeatability: 'single', order: 10},
   user: {id: 'user', nginxName: 'user', contexts: ['main'], arguments: [{kinds: ['identifier']}, {kinds: ['identifier'], optional: true}], repeatability: 'single', order: 20},
   worker_processes: {id: 'worker_processes', nginxName: 'worker_processes', contexts: ['main'], arguments: [{kinds: ['integer', 'keyword'], keywords: ['auto'], minimum: 1, maximum: 1024}], repeatability: 'single', order: 30},
-  error_log: {id: 'error_log', nginxName: 'error_log', contexts: ['main', 'http', 'server', 'location'], arguments: [{kinds: ['path']}, {kinds: ['keyword'], optional: true, keywords: ['debug', 'info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg']}], repeatability: 'single', order: 40},
+  error_log: {id: 'error_log', nginxName: 'error_log', contexts: ['main', 'http', 'server', 'location'], arguments: [{kinds: ['file-path']}, {kinds: ['keyword'], optional: true, keywords: ['debug', 'info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg']}], repeatability: 'single', order: 40},
   pid: {id: 'pid', nginxName: 'pid', contexts: ['main'], arguments: [{kinds: ['path']}], repeatability: 'single', order: 50},
   include: {id: 'include', nginxName: 'include', contexts: ['main', 'http', 'server', 'location'], arguments: [{kinds: ['path', 'file-path']}], repeatability: 'repeatable', order: 60},
   worker_connections: {id: 'worker_connections', nginxName: 'worker_connections', contexts: ['events'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 1_000_000}], repeatability: 'single', order: 100},
@@ -48,6 +49,7 @@ const directives = deepFreeze({
   index: {id: 'index', nginxName: 'index', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['index-file', 'literal'], variadic: true}], repeatability: 'single', order: 230},
   try_files: {id: 'try_files', nginxName: 'try_files', contexts: ['server', 'location'], arguments: [{kinds: ['try-file-candidate']}, {kinds: ['try-file-candidate']}, {kinds: ['try-file-fallback']}], repeatability: 'single', order: 380},
   listen: {id: 'listen', nginxName: 'listen', contexts: ['server'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}, {kinds: ['keyword'], optional: true, keywords: ['default_server', 'ssl']}], repeatability: 'keyed', order: 300},
+  log_format: {id: 'log_format', nginxName: 'log_format', contexts: ['http'], arguments: [{kinds: ['log-format-name']}, {kinds: ['keyword'], keywords: ['escape=json']}, {kinds: ['log-format-template']}], repeatability: 'keyed', order: 215},
   server_name: {id: 'server_name', nginxName: 'server_name', contexts: ['server'], arguments: [{kinds: ['domain'], variadic: true}], repeatability: 'single', order: 310},
   return: {id: 'return', nginxName: 'return', contexts: ['server', 'location'], arguments: [{kinds: ['integer'], minimum: 100, maximum: 599}, {kinds: ['redirect-url']}], repeatability: 'single', order: 320},
   ssl_certificate: {id: 'ssl_certificate', nginxName: 'ssl_certificate', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 330},

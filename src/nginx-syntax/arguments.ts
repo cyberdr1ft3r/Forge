@@ -1,4 +1,5 @@
 import type {ArgumentRule} from './registry.js';
+import {FORGE_JSON_LOG_FORMAT_NAME, FORGE_JSON_LOG_FORMAT_TEMPLATE} from './types.js';
 import type {KnownNginxVariable, NginxArgument} from './types.js';
 
 const allowedVariables = new Set<KnownNginxVariable>([
@@ -141,6 +142,10 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return validFilePath(value) ? undefined : 'File path must be absolute, bounded, traversal-free, and contain no whitespace, globs, or empty segments.';
     case 'index-file':
       return validIndexFile(value) ? undefined : 'Index file must be one bounded filename containing only letters, digits, dots, underscores, or hyphens.';
+    case 'log-format-name':
+      return value === FORGE_JSON_LOG_FORMAT_NAME ? undefined : `Log format name must be the reserved ${FORGE_JSON_LOG_FORMAT_NAME} preset.`;
+    case 'log-format-template':
+      return value === FORGE_JSON_LOG_FORMAT_TEMPLATE ? undefined : 'Log format template must exactly match a trusted Forge preset.';
     case 'redirect-url': {
       const match = /^https:\/\/([a-z0-9.-]+)\$request_uri$/.exec(value);
       return match !== null && validDomain(match[1] ?? '') ? undefined : 'Redirect URL must use a validated HTTPS domain followed by the literal $request_uri variable.';
@@ -172,6 +177,7 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
 
 export function serializeArgument(argument: NginxArgument): string {
   if (argument.kind === 'integer') return String(argument.value);
+  if (argument.kind === 'log-format-template') return `'${argument.value}'`;
   if (argument.kind === 'quoted') {
     const escaped = argument.value
       .replaceAll('\\', '\\\\')
