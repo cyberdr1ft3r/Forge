@@ -94,7 +94,8 @@ The narrow registry additions follow the official Nginx documentation:
 - OpenSSL version, certificate contents, key permissions, DNS, upstream reachability, filesystem layout, include order, and target-host state are operator prerequisites, not verified facts.
 - Scoped IPv6 zone identifiers, Unix-socket upstreams, upstream groups/load balancing, caching, rate limits, advanced rewrites, regular-expression locations, and arbitrary proxy variables are outside Phase 2.
 - The legacy `generateNginx` API and UI remain unchanged. Migration requires separate compatibility work.
-- Static success means Forge accepted the capability plan and AST. Native `nginx -t` and real-host verification remain distinct and unavailable here.
+- Static success means Forge accepted the capability plan and AST. GitHub Actions now runs **independent native `nginx -t` fixture tests** for HTTP, TLS with a disposable certificate, WebSocket, and a site fragment plus HTTP-scope include. This is CI fixture evidence only: the browser engine still reports native validation as `unavailable` for a user's specific output, and target-host verification remains separate.
+- The declared target modules/version in a request are user-supplied assumptions, **not detected or verified** capabilities of the eventual destination host. A successful CI fixture does not confirm any user's Nginx modules, certificates, permissions, DNS, or runtime behavior.
 
 ## Architecture-reference reconciliation
 
