@@ -52,8 +52,12 @@ function runProcess(command, args, {timeoutMs = PROCESS_TIMEOUT_MS} = {}) {
 }
 
 function dockerSecurityArguments() {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) throw new Error('A numeric Linux UID/GID is required for isolated fixture access.');
   return [
     '--rm', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '--user', `${uid}:${gid}`,
     '--read-only', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=16m',
     '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,size=16m',
@@ -245,7 +249,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   await mkdir(dirname(options.report), {recursive: true});
   const root = await mkdtemp(join(tmpdir(), 'forge-nginx-native-'));
-  const report = {schemaVersion: '1.0', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: []};
+  const report = {schemaVersion: '1.0', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: []};
   try {
     const pull = await runProcess('docker', ['pull', options.image], {timeoutMs: PULL_TIMEOUT_MS});
     requireSuccess(pull, `Pull ${options.image}`);
