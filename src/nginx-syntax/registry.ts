@@ -48,7 +48,7 @@ const directives = deepFreeze({
   index: {id: 'index', nginxName: 'index', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['literal'], variadic: true}], repeatability: 'single', order: 230},
   listen: {id: 'listen', nginxName: 'listen', contexts: ['server'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}, {kinds: ['keyword'], optional: true, keywords: ['default_server', 'ssl']}], repeatability: 'keyed', order: 300},
   server_name: {id: 'server_name', nginxName: 'server_name', contexts: ['server'], arguments: [{kinds: ['domain'], variadic: true}], repeatability: 'single', order: 310},
-  return: {id: 'return', nginxName: 'return', contexts: ['server', 'location'], arguments: [{kinds: ['integer'], minimum: 100, maximum: 599}, {kinds: ['keyword'], keywords: ['https://$host$request_uri']}], repeatability: 'single', order: 320},
+  return: {id: 'return', nginxName: 'return', contexts: ['server', 'location'], arguments: [{kinds: ['integer'], minimum: 100, maximum: 599}, {kinds: ['redirect-url']}], repeatability: 'single', order: 320},
   ssl_certificate: {id: 'ssl_certificate', nginxName: 'ssl_certificate', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 330},
   ssl_certificate_key: {id: 'ssl_certificate_key', nginxName: 'ssl_certificate_key', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 340},
   ssl_protocols: {id: 'ssl_protocols', nginxName: 'ssl_protocols', contexts: ['http', 'server'], arguments: [{kinds: ['keyword'], keywords: ['TLSv1.2', 'TLSv1.3'], variadic: true}], repeatability: 'single', order: 350},
