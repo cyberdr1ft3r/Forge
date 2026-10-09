@@ -46,6 +46,12 @@ Positive fixtures are unmodified Forge composition artifacts except for the expl
 - complete `nginx.conf` with all Phase 2 capabilities;
 - `site.conf` plus the supporting HTTP-context WebSocket map;
 - byte-identical output from equivalent capability selections in different orders.
+- two exact-name HTTP sites sharing port 80;
+- two HTTPS sites sharing port 443 with separate disposable certificates;
+- multiple WebSocket sites sharing one HTTP-level map;
+- mixed HTTP, HTTPS, routed, and WebSocket sites;
+- a multi-site fragment bundle with one ancillary HTTP file;
+- byte-identical output from equivalent site-order permutations.
 
 Negative fixtures are clearly labelled test-only mutations of a known-good artifact. They verify native rejection of:
 
@@ -59,6 +65,8 @@ Negative fixtures are clearly labelled test-only mutations of a known-good artif
 - a site fragment incorrectly used as the top-level configuration.
 
 Assertions match stable, meaningful fragments such as `directive is not allowed here`, `directive is duplicate`, `invalid number of arguments`, `cannot load certificate`, and `unknown directive`. Complete stderr text, process IDs, and temporary paths are intentionally not snapshot-tested.
+
+The harness also records separate policy evidence. Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. Both tested Nginx lines also accept two contradictory maps targeting the same variable; Forge rejects that semantic shared-resource conflict before serialization. These cases are neither counted as native parser failures nor presented as supported Forge configurations. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
 ## Isolation and threat model
 

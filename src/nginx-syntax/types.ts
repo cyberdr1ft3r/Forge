@@ -32,6 +32,8 @@ export interface NginxSourceProvenance {
   readonly kind: 'engine' | 'generator' | 'capability';
   readonly id: string;
   readonly version?: string;
+  /** Stable owning site for nodes produced by multi-site composition. */
+  readonly siteId?: string;
 }
 
 export type NginxArgument =

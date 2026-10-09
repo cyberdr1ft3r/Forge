@@ -51,6 +51,8 @@ Issue #14 Phase 2 adds the backend capability planner under `src/nginx-compositi
 
 Issue #14 Phase 3 adds a CI-only native validation harness and official-image compatibility matrix. It validates actual composition artifacts with `nginx -t`, records version/module evidence, and proves representative invalid mutations are rejected. It does not execute in the browser or establish target-host readiness. See [`NGINX_NATIVE_VALIDATION_PHASE3.md`](NGINX_NATIVE_VALIDATION_PHASE3.md).
 
+The multi-site hardening increment adds the additive `composeNginxSites()` API. It orders bounded site plans deterministically, deduplicates shared HTTP AST resources by semantic identity, rejects ambiguous listener/server-name ownership, and carries site provenance through diagnostics and explanations without changing the legacy single-site path. See [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
+
 ## Manifest and versioning
 
 Every manifest declares:

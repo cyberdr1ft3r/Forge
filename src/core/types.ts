@@ -11,6 +11,8 @@ export interface Diagnostic {
   readonly stage: DiagnosticStage;
   readonly message: string;
   readonly path?: string;
+  /** Present when a diagnostic belongs to one site in a multi-site composition. */
+  readonly siteId?: string;
 }
 
 export interface ValidationRecord {

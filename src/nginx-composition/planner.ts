@@ -131,7 +131,7 @@ function versionAtLeast(actual: readonly [number, number, number], minimum: stri
   return true;
 }
 
-function routeBlock(route: PlannedRoute, websocket: boolean): BlockNode<'location'> {
+function routeBlock(route: PlannedRoute, websocket: boolean, siteId?: string): BlockNode<'location'> {
   const proxyUrl = `http://${route.targetHost}:${route.targetPort}${route.forwarding === 'strip-prefix' ? '/' : ''}`;
   const children: NginxNode[] = [
     directive('proxy_http_version', [arg.keyword('1.1')], route.source),
@@ -142,7 +142,9 @@ function routeBlock(route: PlannedRoute, websocket: boolean): BlockNode<'locatio
     directive('proxy_set_header', [arg.headerName('X-Real-IP'), arg.variable('$remote_addr')], route.source),
   ];
   if (websocket) {
-    const websocketSource: NginxSourceProvenance = {kind: 'capability', id: 'websocket', version: ENGINE_VERSION};
+    const websocketSource: NginxSourceProvenance = siteId === undefined
+      ? {kind: 'capability', id: 'websocket', version: ENGINE_VERSION}
+      : {kind: 'capability', id: 'websocket', version: ENGINE_VERSION, siteId};
     children.push(
       directive('proxy_set_header', [arg.headerName('Upgrade'), arg.variable('$http_upgrade')], websocketSource),
       directive('proxy_set_header', [arg.headerName('Connection'), arg.variable('$connection_upgrade')], websocketSource),
@@ -151,14 +153,17 @@ function routeBlock(route: PlannedRoute, websocket: boolean): BlockNode<'locatio
   return block('location', [arg.locationPrefix(route.prefix)], children, route.source);
 }
 
-function applicationServers(
+export function applicationServers(
   domain: string,
   routes: readonly PlannedRoute[],
   websocketRoutes: ReadonlySet<string>,
   tls: TlsContribution | undefined,
+  siteId?: string,
 ): readonly BlockNode<'server'>[] {
-  const reverseSource: NginxSourceProvenance = {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION};
-  const routeNodes = routes.map(route => routeBlock(route, websocketRoutes.has(route.prefix)));
+  const reverseSource: NginxSourceProvenance = siteId === undefined
+    ? {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION}
+    : {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION, siteId};
+  const routeNodes = routes.map(route => routeBlock(route, websocketRoutes.has(route.prefix), siteId));
   if (tls === undefined) {
     return [block('server', [], [
       directive('listen', [arg.integer(80)], reverseSource),

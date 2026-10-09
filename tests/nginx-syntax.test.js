@@ -336,6 +336,32 @@ test('duplicate directives, blocks, map keys, and server identities are diagnose
   assert.ok(validateNginxDocument({profile: 'site-fragment', source, children: [serverBlock(), defaultServer]}).some(item => item.code === 'nginx.server.conflict'));
 });
 
+test('server conflict validation allows shared ports but rejects overlapping names and listener modes', () => {
+  const virtualServer = (name, option) => block('server', [], [
+    directive('listen', option === undefined ? [arg.integer(443)] : [arg.integer(443), arg.keyword(option)], source),
+    directive('server_name', [arg.domain(name)], source),
+  ], source);
+
+  const sharedPort = {profile: 'site-fragment', source, children: [virtualServer('a.example.com', 'ssl'), virtualServer('b.example.com', 'ssl')]};
+  assert.deepEqual(validateNginxDocument(sharedPort), []);
+
+  const duplicateName = {profile: 'site-fragment', source, children: [virtualServer('same.example.com', 'ssl'), virtualServer('same.example.com', 'ssl')]};
+  assert.ok(validateNginxDocument(duplicateName).some(item => item.code === 'nginx.server.conflict'));
+
+  const modeConflict = {profile: 'site-fragment', source, children: [virtualServer('a.example.com', 'ssl'), virtualServer('b.example.com')]};
+  assert.ok(validateNginxDocument(modeConflict).some(item => item.code === 'nginx.listener.mode-conflict'));
+
+  const defaults = {profile: 'site-fragment', source, children: [virtualServer('a.example.com', 'default_server'), virtualServer('b.example.com', 'default_server')]};
+  assert.ok(validateNginxDocument(defaults).some(item => item.code === 'nginx.listener.default-conflict'));
+});
+
+test('site provenance accepts stable IDs and rejects unsafe IDs', () => {
+  const valid = {...source, siteId: 'customer-a'};
+  assert.deepEqual(validateNginxDocument({profile: 'site-fragment', source: valid, children: [block('server', [], [directive('listen', [arg.integer(80)], valid), directive('server_name', [arg.domain('a.example.com')], valid)], valid)]}), []);
+  const invalid = {...source, siteId: 'bad;include'};
+  assert.ok(validateNginxDocument({profile: 'site-fragment', source: invalid, children: [serverBlock()]}).some(item => item.code === 'nginx.source.site-id'));
+});
+
 test('output profiles reject incomplete and context-specific root combinations', () => {
   assert.ok(validateNginxDocument({profile: 'full-config', source, children: []}).some(item => item.code === 'nginx.profile.events'));
   assert.ok(validateNginxDocument({profile: 'full-config', source, children: []}).some(item => item.code === 'nginx.profile.http'));

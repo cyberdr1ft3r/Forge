@@ -18,6 +18,7 @@ function validateSource(source: unknown, path: string): readonly Diagnostic[] {
   if (candidate.kind !== 'engine' && candidate.kind !== 'generator' && candidate.kind !== 'capability') diagnostics.push(error('nginx.source.kind', 'Source kind must be engine, generator, or capability.', `${path}.kind`));
   if (typeof candidate.id !== 'string' || !/^[a-z][a-z0-9-]{0,62}$/.test(candidate.id)) diagnostics.push(error('nginx.source.id', 'Source ID must be a stable lowercase identifier.', `${path}.id`));
   if (candidate.version !== undefined && (typeof candidate.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(candidate.version))) diagnostics.push(error('nginx.source.version', 'Source version must use semantic versioning.', `${path}.version`));
+  if (candidate.siteId !== undefined && (typeof candidate.siteId !== 'string' || !/^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate.siteId))) diagnostics.push(error('nginx.source.site-id', 'Source site ID must be a stable lowercase identifier.', `${path}.siteId`));
   return diagnostics;
 }
 
@@ -62,13 +63,20 @@ function blockIdentity(block: BlockNode): string {
   }
 }
 
-function serverIdentity(block: BlockNode): string | undefined {
-  if (!Array.isArray(block.children)) return undefined;
+interface ServerDescriptor {
+  readonly listeners: readonly {readonly identity: string; readonly mode: string; readonly defaultServer: boolean}[];
+  readonly names: readonly string[];
+}
+
+function serverDescriptor(block: BlockNode): ServerDescriptor {
+  if (!Array.isArray(block.children)) return {listeners: [], names: []};
   const directives = block.children.filter((node): node is DirectiveNode => node !== null && typeof node === 'object' && !Array.isArray(node) && node.kind === 'directive' && Array.isArray(node.args));
-  const listens = directives.filter(node => node.name === 'listen').map(node => argumentValueIdentity(node.args[0])).sort();
-  const names = directives.filter(node => node.name === 'server_name').flatMap(node => node.args.map(argumentValueIdentity)).sort();
-  if (listens.length === 0 || names.length === 0) return undefined;
-  return `listen=${listens.join(',')};names=${names.join(',')}`;
+  const listeners = directives.filter(node => node.name === 'listen').map(node => {
+    const option = argumentValueIdentity(node.args[1]);
+    return {identity: argumentValueIdentity(node.args[0]), mode: option === 'ssl' ? 'ssl' : 'plain', defaultServer: option === 'default_server'};
+  });
+  const names = directives.filter(node => node.name === 'server_name').flatMap(node => node.args.map(argumentValueIdentity));
+  return {listeners, names};
 }
 
 function validateSiblingConflicts(children: readonly unknown[], parent: NginxContext, path: string): readonly Diagnostic[] {
@@ -76,6 +84,8 @@ function validateSiblingConflicts(children: readonly unknown[], parent: NginxCon
   const directiveKeys = new Map<string, number>();
   const blockKeys = new Map<string, number>();
   const serverKeys = new Map<string, number>();
+  const listenerModes = new Map<string, {readonly mode: string; readonly index: number}>();
+  const defaultListeners = new Map<string, number>();
 
   children.forEach((node, index) => {
     if (node === null || typeof node !== 'object' || Array.isArray(node)) return;
@@ -101,11 +111,22 @@ function validateSiblingConflicts(children: readonly unknown[], parent: NginxCon
         else blockKeys.set(key, index);
       }
       if (parent === 'http' && blockNode.blockType === 'server') {
-        const identity = serverIdentity(blockNode as BlockNode);
-        if (identity !== undefined) {
-          const first = serverKeys.get(identity);
-          if (first !== undefined) diagnostics.push(error('nginx.server.conflict', `Server has the same listener and server name as the server at ${path}[${first}].`, `${path}[${index}]`));
-          else serverKeys.set(identity, index);
+        const descriptor = serverDescriptor(blockNode as BlockNode);
+        for (const listener of descriptor.listeners) {
+          const existingMode = listenerModes.get(listener.identity);
+          if (existingMode !== undefined && existingMode.mode !== listener.mode) diagnostics.push(error('nginx.listener.mode-conflict', `Listener ${listener.identity} mixes ${existingMode.mode} and ${listener.mode} modes; first declared at ${path}[${existingMode.index}].`, `${path}[${index}]`));
+          else if (existingMode === undefined) listenerModes.set(listener.identity, {mode: listener.mode, index});
+          if (listener.defaultServer) {
+            const firstDefault = defaultListeners.get(listener.identity);
+            if (firstDefault !== undefined) diagnostics.push(error('nginx.listener.default-conflict', `Listener ${listener.identity} declares more than one default server; first declared at ${path}[${firstDefault}].`, `${path}[${index}]`));
+            else defaultListeners.set(listener.identity, index);
+          }
+          for (const name of descriptor.names) {
+            const identity = `${listener.identity}:${name}`;
+            const first = serverKeys.get(identity);
+            if (first !== undefined) diagnostics.push(error('nginx.server.conflict', `Server name ${name} is already assigned to listener ${listener.identity} at ${path}[${first}].`, `${path}[${index}]`));
+            else serverKeys.set(identity, index);
+          }
         }
       }
     }

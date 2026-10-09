@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   composeNginxCapabilities,
+  composeNginxSites,
   listCapabilityDefinitions,
+  mergeSharedHttpResources,
   resolveCapabilityOrder,
 } from '../dist/nginx-composition/index.js';
+import {block, mapEntry, nginxArgument as arg} from '../dist/nginx-syntax/index.js';
 
 const target = {
   version: '1.24.0',
@@ -39,6 +42,113 @@ const routing = {
 };
 
 const compose = (capabilities, profile = 'full-config', selectedTarget = target) => composeNginxCapabilities({profile, target: selectedTarget, capabilities});
+const siteProxy = (id, domain, port = 3000) => ({id, capabilities: [{id: 'reverse-proxy', input: {domain, targetHost: '127.0.0.1', targetPort: port}}]});
+const composeSites = (sites, profile = 'full-config') => composeNginxSites({profile, target, sites});
+
+test('multi-site API is additive and keeps legacy single-site artifacts byte-identical', () => {
+  const before = compose([reverseProxy]);
+  const after = compose([reverseProxy]);
+  assert.equal(before.ok, true);
+  assert.deepEqual(after, before);
+
+  const multi = composeSites([siteProxy('app', 'app.example.com')]);
+  assert.equal(multi.ok, true);
+  assert.equal(multi.provenance.version, '2.1.0');
+  assert.deepEqual(multi.provenance.sites, ['app']);
+  assert.equal(multi.artifacts[0].content, before.artifacts[0].content);
+});
+
+test('two exact-name HTTP sites legitimately share port 80 and are ordered by site identity', () => {
+  const sites = [siteProxy('zeta', 'zeta.example.com', 3002), siteProxy('alpha', 'alpha.example.com', 3001)];
+  const result = composeSites(sites);
+  const reordered = composeSites([...sites].reverse());
+  assert.equal(result.ok, true);
+  assert.deepEqual(reordered.artifacts, result.artifacts);
+  const content = result.artifacts[0].content;
+  assert.equal((content.match(/listen 80;/g) ?? []).length, 2);
+  assert.ok(content.indexOf('alpha.example.com') < content.indexOf('zeta.example.com'));
+});
+
+test('multiple TLS and WebSocket sites share listeners safely and emit one semantic map', () => {
+  const sites = ['alpha', 'bravo'].map((id, index) => ({id, capabilities: [
+    {id: 'reverse-proxy', input: {domain: `${id}.example.com`, targetHost: '127.0.0.1', targetPort: 3100 + index}},
+    {id: 'tls', input: {certificatePath: `/certs/${id}.pem`, privateKeyPath: `/keys/${id}.key`, redirectHttp: false}},
+    websocket,
+  ]}));
+  const result = composeSites(sites);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.equal((content.match(/listen 443 ssl;/g) ?? []).length, 2);
+  assert.equal((content.match(/map \$http_upgrade \$connection_upgrade/g) ?? []).length, 1);
+  assert.ok(result.explanations.some(item => item.code === 'composition.shared.dependencies' && item.siteIds?.join(',') === 'alpha,bravo'));
+  assert.ok(result.prerequisites.some(item => item.siteId === 'alpha'));
+});
+
+test('multi-site fragments contain all servers and exactly one shared HTTP artifact', () => {
+  const sites = [siteProxy('plain', 'plain.example.com'), {
+    id: 'socket', capabilities: [
+      {id: 'reverse-proxy', input: {domain: 'socket.example.com', targetHost: '127.0.0.1', targetPort: 3010}},
+      websocket,
+    ],
+  }];
+  const result = composeSites(sites, 'site-fragment');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.artifacts.map(item => item.filename), ['site.conf', 'http-shared.conf']);
+  assert.equal((result.artifacts[1].content.match(/map \$http_upgrade/g) ?? []).length, 1);
+  assert.match(result.artifacts[0].content, /plain\.example\.com/);
+  assert.match(result.artifacts[0].content, /socket\.example\.com/);
+});
+
+test('listener/name conflicts are site-scoped while distinct protocols and names remain supported', () => {
+  const duplicate = composeSites([siteProxy('alpha', 'same.example.com'), siteProxy('bravo', 'same.example.com')]);
+  assert.equal(duplicate.ok, false);
+  assert.ok(duplicate.diagnostics.some(item => item.code === 'composition.server.conflict' && item.siteId === 'bravo'));
+
+  const differentListeners = composeSites([
+    siteProxy('http', 'same.example.com'),
+    {id: 'https', capabilities: [
+      {id: 'reverse-proxy', input: {domain: 'same.example.com', targetHost: '127.0.0.1', targetPort: 3443}},
+      tls,
+    ]},
+  ]);
+  assert.equal(differentListeners.ok, true);
+});
+
+test('multi-site schemas reject unsupported host patterns, unknown controls, and adversarial identifiers', () => {
+  for (const id of ['', 'Upper', '-bad', 'bad-', 'a'.repeat(64), 'site; include /tmp/x']) {
+    const result = composeSites([{...siteProxy('valid', 'valid.example.com'), id}]);
+    assert.equal(result.ok, false, id);
+    assert.ok(result.diagnostics.some(item => item.code === 'composition.site.id'));
+  }
+  const wildcard = composeSites([siteProxy('wild', '*.example.com')]);
+  assert.equal(wildcard.ok, false);
+  assert.ok(wildcard.diagnostics.some(item => item.siteId === 'wild' && item.code === 'composition.input.grammar'));
+  const defaultServer = composeNginxSites({profile: 'full-config', target, sites: [{...siteProxy('app', 'app.example.com'), defaultServer: true}]});
+  assert.equal(defaultServer.ok, false);
+  assert.ok(defaultServer.diagnostics.some(item => item.code === 'composition.site.unknown'));
+  const duplicateId = composeSites([siteProxy('app', 'a.example.com'), siteProxy('app', 'b.example.com')]);
+  assert.equal(duplicateId.ok, false);
+  assert.ok(duplicateId.diagnostics.some(item => item.code === 'composition.site.duplicate'));
+});
+
+test('shared HTTP resources deduplicate semantically and contradictory definitions fail closed', () => {
+  const source = {kind: 'capability', id: 'websocket', version: '2.0.0', siteId: 'alpha'};
+  const map = value => block('map', [arg.variable('$http_upgrade'), arg.variable('$connection_upgrade')], [
+    mapEntry(arg.keyword('default'), arg.literal(value), source),
+  ], source);
+  const identical = mergeSharedHttpResources([{siteId: 'bravo', node: map('upgrade')}, {siteId: 'alpha', node: map('upgrade')}]);
+  assert.equal(identical.ok, true);
+  assert.deepEqual(identical.resources[0].siteIds, ['alpha', 'bravo']);
+  const conflict = mergeSharedHttpResources([{siteId: 'alpha', node: map('upgrade')}, {siteId: 'bravo', node: map('close')}]);
+  assert.equal(conflict.ok, false);
+  assert.ok(conflict.diagnostics.some(item => item.code === 'composition.shared.conflict' && item.siteId === 'bravo'));
+});
+
+test('multi-site expansion remains bounded', () => {
+  const result = composeSites(Array.from({length: 17}, (_, index) => siteProxy(`site-${index}`, `site-${index}.example.com`)));
+  assert.equal(result.ok, false);
+  assert.ok(result.diagnostics.some(item => item.code === 'composition.sites.count'));
+});
 
 test('capability registry is typed, versioned, immutable, and limited to the four Phase 2 shelves', () => {
   const definitions = listCapabilityDefinitions();
