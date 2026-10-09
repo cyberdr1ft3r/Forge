@@ -166,7 +166,7 @@ function applicationServers(
   const redirect = block('server', [], [
     directive('listen', [arg.integer(80)], tls.source),
     directive('server_name', [arg.domain(domain)], reverseSource),
-    directive('return', [arg.integer(301), arg.keyword('https://$host$request_uri')], tls.source),
+    directive('return', [arg.integer(301), arg.redirectUrl(`https://${domain}$request_uri`)], tls.source),
   ], tls.source);
   return [redirect, secure];
 }
