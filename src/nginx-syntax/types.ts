@@ -11,6 +11,7 @@ export type NginxArgumentKind =
   | 'path'
   | 'file-path'
   | 'proxy-url'
+  | 'redirect-url'
   | 'upstream-address'
   | 'location-prefix'
   | 'variable'
