@@ -15,6 +15,7 @@ import type {
   NginxCompositionRequest,
   NginxModule,
   PlannedRoute,
+  StaticSiteContribution,
   TlsContribution,
 } from './types.js';
 
@@ -159,29 +160,34 @@ export function applicationServers(
   websocketRoutes: ReadonlySet<string>,
   tls: TlsContribution | undefined,
   siteId?: string,
+  staticSite?: StaticSiteContribution,
 ): readonly BlockNode<'server'>[] {
   const reverseSource: NginxSourceProvenance = siteId === undefined
     ? {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION}
     : {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION, siteId};
   const routeNodes = routes.map(route => routeBlock(route, websocketRoutes.has(route.prefix), siteId));
+  const ownerSource = staticSite?.source ?? reverseSource;
+  const applicationNodes: readonly NginxNode[] = staticSite === undefined
+    ? routeNodes
+    : [...staticSite.serverDirectives, staticSite.rootLocation];
   if (tls === undefined) {
     return [block('server', [], [
-      directive('listen', [arg.integer(80)], reverseSource),
-      directive('server_name', [arg.domain(domain)], reverseSource),
-      ...routeNodes,
-    ], reverseSource)];
+      directive('listen', [arg.integer(80)], ownerSource),
+      directive('server_name', [arg.domain(domain)], ownerSource),
+      ...applicationNodes,
+    ], ownerSource)];
   }
 
   const secure = block('server', [], [
     directive('listen', [arg.integer(443), arg.keyword('ssl')], tls.source),
-    directive('server_name', [arg.domain(domain)], reverseSource),
+    directive('server_name', [arg.domain(domain)], ownerSource),
     ...tls.directives,
-    ...routeNodes,
+    ...applicationNodes,
   ], tls.source);
   if (!tls.redirectHttp) return [secure];
   const redirect = block('server', [], [
     directive('listen', [arg.integer(80)], tls.source),
-    directive('server_name', [arg.domain(domain)], reverseSource),
+    directive('server_name', [arg.domain(domain)], ownerSource),
     directive('return', [arg.integer(301), arg.redirectUrl(`https://${domain}$request_uri`)], tls.source),
   ], tls.source);
   return [redirect, secure];
@@ -246,6 +252,20 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
     capabilities.push({definition, input: validated.value});
   }
 
+  if (selectedIds.has('static-site') && selectedIds.has('reverse-proxy')) {
+    const staticDomain = (capabilities.find(item => item.definition.id === 'static-site')?.input as {domain?: unknown} | undefined)?.domain;
+    const proxyDomain = (capabilities.find(item => item.definition.id === 'reverse-proxy')?.input as {domain?: unknown} | undefined)?.domain;
+    const conflict = staticDomain !== proxyDomain
+      ? diagnostic('composition.site.domain-conflict', `Static and reverse-proxy site owners declare different domains: ${String(staticDomain)} and ${String(proxyDomain)}.`, 'request.capabilities')
+      : diagnostic('composition.site.root-conflict', 'Static-site and reverse-proxy both own the root location; split them into independent sites instead of changing routing semantics implicitly.', 'request.capabilities');
+    return failure([conflict], capabilities);
+  }
+  const hasSiteOwner = selectedIds.has('static-site') || selectedIds.has('reverse-proxy');
+  const ownerDependent = capabilities.find(item => item.definition.requiresSiteOwner);
+  if (!hasSiteOwner && ownerDependent !== undefined) {
+    return failure([diagnostic('composition.dependency.site-owner', `${ownerDependent.definition.id} requires either reverse-proxy or static-site to establish the site.`, `request.capabilities.${ownerDependent.definition.id}`)], capabilities);
+  }
+
   const resolution = resolveCapabilityOrder(capabilities.map(item => ({id: item.definition.id, dependencies: item.definition.dependencies})), [...selectedIds]);
   if (!resolution.ok) return failure(resolution.diagnostics, capabilities);
   for (const item of capabilities) {
@@ -268,7 +288,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   sortExplanations(explanations);
   sortPrerequisites(prerequisites);
   const domain = contributions.map(item => item.domain).find(value => value !== undefined);
-  if (domain === undefined) return failure([diagnostic('composition.site.missing', 'Composition requires the reverse-proxy capability to establish a server and domain.', 'request.capabilities')], capabilities, explanations, prerequisites);
+  if (domain === undefined) return failure([diagnostic('composition.site.missing', 'Composition requires exactly one trusted site owner (reverse-proxy or static-site) to establish a server and domain.', 'request.capabilities')], capabilities, explanations, prerequisites);
 
   const routes = contributions.flatMap(item => item.routes ?? []);
   if (routes.length > 64) return failure([diagnostic('composition.routes.expansion', 'Composition exceeds the maximum of 64 planned routes.', 'request.capabilities', 'generation')], capabilities, explanations, prerequisites, true);
@@ -290,6 +310,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   }
 
   const tls = contributions.map(item => item.tls).find(value => value !== undefined);
+  const staticSite = contributions.map(item => item.staticSite).find(value => value !== undefined);
   const sharedByIdentity = new Map<string, NginxNode>();
   let sharedConflict: Diagnostic | undefined;
   for (const node of contributions.flatMap(item => item.sharedHttpNodes ?? [])) {
@@ -300,7 +321,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   }
   if (sharedConflict !== undefined) return failure([sharedConflict], capabilities, explanations, prerequisites, true);
   const sharedHttpNodes = [...sharedByIdentity.entries()].sort(([left], [right]) => left.localeCompare(right, 'en')).map(([, node]) => node);
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls);
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls, undefined, staticSite);
   const engineSource: NginxSourceProvenance = {kind: 'engine', id: 'nginx-capability-composition', version: ENGINE_VERSION};
 
   const document = candidate.profile === 'full-config'
@@ -320,8 +341,9 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
     const supporting = supportingCompilation.artifacts[0];
     if (supporting !== undefined) artifacts.push({...supporting, role: 'supporting'});
     staticDiagnostics.push(...supportingCompilation.diagnostics);
-    explanations.push({code: 'composition.artifact.http-shared', capabilityId: 'websocket', context: 'artifact', semanticIdentity: 'artifact:http-shared.conf', message: 'A supporting HTTP-context artifact was emitted because site fragments cannot contain a map block.'});
-    prerequisites.push({code: 'composition.artifact.include-http', capabilityId: 'websocket', kind: 'operator-action', description: 'Include http-shared.conf exactly once from the enclosing Nginx HTTP context.'});
+    const sharedCapabilityId = sharedHttpNodes[0]?.source.id as NginxCapabilityId;
+    explanations.push({code: 'composition.artifact.http-shared', capabilityId: sharedCapabilityId, context: 'artifact', semanticIdentity: 'artifact:http-shared.conf', message: 'A supporting HTTP-context artifact was emitted because site fragments cannot contain HTTP-level shared resources.'});
+    prerequisites.push({code: 'composition.artifact.include-http', capabilityId: sharedCapabilityId, kind: 'operator-action', description: 'Include http-shared.conf exactly once from the enclosing Nginx HTTP context.'});
   }
 
   for (const item of capabilities) {

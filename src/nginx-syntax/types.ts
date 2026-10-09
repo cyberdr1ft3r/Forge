@@ -8,10 +8,14 @@ export type NginxArgumentKind =
   | 'identifier'
   | 'integer'
   | 'domain'
+  | 'directory-path'
   | 'path'
   | 'file-path'
+  | 'index-file'
   | 'proxy-url'
   | 'redirect-url'
+  | 'try-file-candidate'
+  | 'try-file-fallback'
   | 'upstream-address'
   | 'location-prefix'
   | 'variable'
@@ -26,7 +30,8 @@ export type KnownNginxVariable =
   | '$proxy_add_x_forwarded_for'
   | '$remote_addr'
   | '$request_uri'
-  | '$scheme';
+  | '$scheme'
+  | '$uri';
 
 export interface NginxSourceProvenance {
   readonly kind: 'engine' | 'generator' | 'capability';
@@ -60,6 +65,7 @@ export type KnownDirectiveName =
   | 'ssl_certificate'
   | 'ssl_certificate_key'
   | 'ssl_protocols'
+  | 'try_files'
   | 'upstream_server'
   | 'user'
   | 'worker_connections'
@@ -114,10 +120,14 @@ export const nginxArgument = Object.freeze({
   identifier: (value: string): NginxArgument => ({kind: 'identifier', value}),
   integer: (value: number): NginxArgument => ({kind: 'integer', value}),
   domain: (value: string): NginxArgument => ({kind: 'domain', value}),
+  directoryPath: (value: string): NginxArgument => ({kind: 'directory-path', value}),
   path: (value: string): NginxArgument => ({kind: 'path', value}),
   filePath: (value: string): NginxArgument => ({kind: 'file-path', value}),
+  indexFile: (value: string): NginxArgument => ({kind: 'index-file', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
   redirectUrl: (value: string): NginxArgument => ({kind: 'redirect-url', value}),
+  tryFileCandidate: (value: '$uri' | '$uri/'): NginxArgument => ({kind: 'try-file-candidate', value}),
+  tryFileFallback: (value: string): NginxArgument => ({kind: 'try-file-fallback', value}),
   upstreamAddress: (value: string): NginxArgument => ({kind: 'upstream-address', value}),
   locationPrefix: (value: string): NginxArgument => ({kind: 'location-prefix', value}),
   variable: (value: KnownNginxVariable): NginxArgument => ({kind: 'variable', value}),

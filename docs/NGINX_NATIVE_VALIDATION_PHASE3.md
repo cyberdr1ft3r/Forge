@@ -52,6 +52,10 @@ Positive fixtures are unmodified Forge composition artifacts except for the expl
 - mixed HTTP, HTTPS, routed, and WebSocket sites;
 - a multi-site fragment bundle with one ancillary HTTP file;
 - byte-identical output from equivalent site-order permutations.
+- a standard static website and an SPA fallback site;
+- multiple static sites, static plus reverse proxy, static plus TLS, and static plus WebSocket proxy sites;
+- a static site-fragment bundle with one ancillary HTTP file;
+- byte-identical output from equivalent static-site order permutations.
 
 Negative fixtures are clearly labelled test-only mutations of a known-good artifact. They verify native rejection of:
 
@@ -65,6 +69,8 @@ Negative fixtures are clearly labelled test-only mutations of a known-good artif
 - a site fragment incorrectly used as the top-level configuration.
 
 Assertions match stable, meaningful fragments such as `directive is not allowed here`, `directive is duplicate`, `invalid number of arguments`, `cannot load certificate`, and `unknown directive`. Complete stderr text, process IDs, and temporary paths are intentionally not snapshot-tested.
+
+Phase 4A adds native-negative mutations for malformed `try_files` arguments and duplicate `root` declarations. Unsafe document roots, unsafe index filenames, duplicate site ownership, and unsupported static/proxy combinations are rejected by Forge before serialization and recorded as policy evidence. The harness creates disposable static fixture files only so referenced document roots are representative; it still runs `nginx -t` only. It does not start workers or claim HTTP file-serving behavior, SPA routing behavior, filesystem permissions, or MIME correctness on a user's host.
 
 The harness also records separate policy evidence. Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. Both tested Nginx lines also accept two contradictory maps targeting the same variable; Forge rejects that semantic shared-resource conflict before serialization. These cases are neither counted as native parser failures nor presented as supported Forge configurations. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
@@ -103,7 +109,7 @@ Local/manual runs accept an exact patch tag such as `nginx:1.24.0`, optionally f
 
 `nginx -t` checks syntax and attempts to open referenced files; it does not prove routing behavior, DNS resolution, upstream reachability, live TLS negotiation, certificate suitability for production, runtime permissions, deployment safety, or service health. Target-host readiness requires a separate authorized workflow under Issue #3. Additional supported image lines or custom module combinations should be added only with explicit support policy and trustworthy reproducible images.
 
-Issue #14 Phase 4 may expand capability shelves only after human review of this phase. It must continue producing typed artifacts and must add matching static and native fixtures. No Phase 4 shelf is implemented here.
+Issue #14 Phase 4A adds only the static website/SPA shelf after the earlier human review. Later shelves must continue producing typed artifacts and add matching static and native fixtures. Load balancing, logging, caching, compression, and rate limiting remain unimplemented.
 
 ## Rollback
 

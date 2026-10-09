@@ -56,5 +56,5 @@ CI extends the immutable-digest-pinned Nginx matrix with multi-HTTP, multi-HTTPS
 
 Existing callers do not need to migrate. New callers choose `composeNginxSites()` only when assembling multiple sites. A one-site multi-site request emits the same configuration content as the equivalent legacy composition request, while adding site-aware metadata.
 
-Remaining work includes any approved Phase 4 capability shelves and later product integration. TLS policy expansion, WebSocket convenience inference, load balancing, caching, security headers, compression, rate limiting, static-site composition, advanced virtual-host matching, deployment, and target-host readiness are not implemented here.
+Phase 4A subsequently adds the static-site shelf described in [`NGINX_STATIC_SITE_PHASE4A.md`](NGINX_STATIC_SITE_PHASE4A.md). Remaining work includes other approved Phase 4 shelves and later product integration. TLS policy expansion, WebSocket convenience inference, load balancing, caching, security headers, compression, rate limiting, advanced virtual-host matching, deployment, and target-host readiness are not implemented here.
 

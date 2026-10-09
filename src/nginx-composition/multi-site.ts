@@ -166,7 +166,14 @@ function planSite(id: string, capabilitiesInput: readonly unknown[], request: Ng
   const websocketRoutes = new Set(contributions.flatMap(item => item.websocketRoutes ?? []));
   const tls = contributions.map(item => item.tls).find(value => value !== undefined);
   const scopedTls = tls === undefined ? undefined : {...tls, source: scopeSource(tls.source, id), directives: tls.directives.map(node => ({...node, source: scopeSource(node.source, id)}))};
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id);
+  const staticSite = contributions.map(item => item.staticSite).find(value => value !== undefined);
+  const scopedStaticSite = staticSite === undefined ? undefined : {
+    ...staticSite,
+    source: scopeSource(staticSite.source, id),
+    serverDirectives: staticSite.serverDirectives.map(node => ({...node, source: scopeSource(node.source, id)})),
+    rootLocation: scopeNode(staticSite.rootLocation, id),
+  };
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite);
   const explanations = contributions.flatMap(item => item.explanations ?? []).map(item => ({...item, siteId: id}));
   const prerequisites = contributions.flatMap(item => item.prerequisites ?? []).map(item => ({...item, siteId: id}));
   const shared = contributions.flatMap(item => item.sharedHttpNodes ?? []).map(node => ({node: scopeNode(node, id), siteId: id}));
@@ -257,8 +264,9 @@ export function composeNginxSites(request: unknown): NginxCompositionOutcome {
     if (!supporting.ok) return failure(supporting.diagnostics, plans, explanations, prerequisites, true);
     const artifact = supporting.artifacts[0];
     if (artifact !== undefined) artifacts.push({...artifact, role: 'supporting'});
-    explanations.push({code: 'composition.artifact.http-shared', capabilityId: 'websocket', context: 'artifact', semanticIdentity: 'artifact:http-shared.conf', siteIds: merged.resources.flatMap(item => item.siteIds).filter((id, index, all) => all.indexOf(id) === index).sort(), message: 'One supporting HTTP-context artifact contains shared resources for all dependent sites.'});
-    prerequisites.push({code: 'composition.artifact.include-http', capabilityId: 'websocket', kind: 'operator-action', description: 'Include http-shared.conf exactly once from the enclosing Nginx HTTP context before site.conf.'});
+    const sharedCapabilityId = sharedNodes[0]?.source.id as NginxCapabilityId;
+    explanations.push({code: 'composition.artifact.http-shared', capabilityId: sharedCapabilityId, context: 'artifact', semanticIdentity: 'artifact:http-shared.conf', siteIds: merged.resources.flatMap(item => item.siteIds).filter((id, index, all) => all.indexOf(id) === index).sort(), message: 'One supporting HTTP-context artifact contains shared resources for all dependent sites.'});
+    prerequisites.push({code: 'composition.artifact.include-http', capabilityId: sharedCapabilityId, kind: 'operator-action', description: 'Include http-shared.conf exactly once from the enclosing Nginx HTTP context before site.conf.'});
   }
   staticDiagnostics.push(...baseArtifactChecks(artifacts));
   if (staticDiagnostics.some(item => item.severity === 'error')) return failure(staticDiagnostics, plans, explanations, prerequisites, true);

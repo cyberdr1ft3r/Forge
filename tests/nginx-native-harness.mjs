@@ -113,6 +113,10 @@ function nativeSite(id, domain, port, extra = []) {
   ]};
 }
 
+function staticCapability(domain, documentRoot, spaFallback = false) {
+  return {id: 'static-site', input: {domain, documentRoot, indexFile: 'index.html', spaFallback}};
+}
+
 async function materializePositive(root, version) {
   const definitions = [
     ['http-reverse-proxy', [proxy], 'full-config'],
@@ -162,12 +166,51 @@ async function materializePositive(root, version) {
   assert.deepEqual(reversed.artifacts, canonical.artifacts, 'Equivalent site orders must emit byte-identical artifacts');
   fixtures.push({...await materializeComposition(root, 'multi-site-order-determinism', canonical, 'full-config'), source: 'forge-multi-site-output', equivalentSelectionOrderVerified: true});
 
+  const staticStandard = staticCapability('static.example.com', '/fixtures/shared/static-standard');
+  const staticSpa = staticCapability('spa.example.com', '/fixtures/shared/static-spa', true);
+  fixtures.push({...await materializeComposition(root, 'static-website', compose(compositionRequest(version, [staticStandard]), 'static-website'), 'full-config'), source: 'forge-static-site-output'});
+  fixtures.push({...await materializeComposition(root, 'static-spa', compose(compositionRequest(version, [staticSpa]), 'static-spa'), 'full-config'), source: 'forge-static-site-output'});
+
+  const multiStaticSites = [
+    {id: 'static-alpha', capabilities: [staticCapability('static-alpha.example.com', '/fixtures/shared/static-standard')]},
+    {id: 'static-bravo', capabilities: [staticCapability('static-bravo.example.com', '/fixtures/shared/static-spa', true)]},
+  ];
+  fixtures.push({...await materializeComposition(root, 'multi-static-sites', composeSites(multiRequest(version, multiStaticSites), 'multi-static-sites'), 'full-config'), source: 'forge-static-site-output'});
+
+  const staticProxySites = [multiStaticSites[0], nativeSite('proxy-alongside-static', 'proxy-alongside-static.example.com', 3601)];
+  fixtures.push({...await materializeComposition(root, 'static-and-proxy', composeSites(multiRequest(version, staticProxySites), 'static-and-proxy'), 'full-config'), source: 'forge-static-site-output'});
+  fixtures.push({...await materializeComposition(root, 'static-and-tls', compose(compositionRequest(version, [staticStandard, tls(false)]), 'static-and-tls'), 'full-config'), source: 'forge-static-site-output'});
+
+  const staticSocketSites = [multiStaticSites[0], nativeSite('socket-alongside-static', 'socket-alongside-static.example.com', 3602, [websocketRoot])];
+  fixtures.push({...await materializeComposition(root, 'static-and-websocket-proxy', composeSites(multiRequest(version, staticSocketSites), 'static-and-websocket-proxy'), 'full-config'), source: 'forge-static-site-output'});
+  fixtures.push({...await materializeComposition(root, 'static-site-fragment-bundle', compose(compositionRequest(version, [staticStandard], 'site-fragment'), 'static-site-fragment-bundle'), 'site-fragment'), source: 'forge-static-site-output'});
+
+  const staticOrderA = composeSites(multiRequest(version, [multiStaticSites[1], staticProxySites[1], multiStaticSites[0]]), 'static-order-a');
+  const staticOrderB = composeSites(multiRequest(version, [multiStaticSites[0], multiStaticSites[1], staticProxySites[1]]), 'static-order-b');
+  assert.deepEqual(staticOrderA.artifacts, staticOrderB.artifacts, 'Equivalent static-site orders must emit byte-identical artifacts');
+  fixtures.push({...await materializeComposition(root, 'static-site-order-determinism', staticOrderA, 'full-config'), source: 'forge-static-site-output', equivalentSelectionOrderVerified: true});
+
   const duplicate = composeNginxSites(multiRequest(version, [nativeSite('one', 'duplicate.example.com', 3501), nativeSite('two', 'duplicate.example.com', 3502)]));
   assert.equal(duplicate.ok, false, 'Forge must reject duplicate listener/server-name ownership');
   assert.ok(duplicate.diagnostics.some(item => item.code === 'composition.server.conflict'));
   const unsupported = composeNginxSites(multiRequest(version, [nativeSite('wildcard', '*.example.com', 3503)]));
   assert.equal(unsupported.ok, false, 'Forge must reject unsupported wildcard server names');
-  return {fixtures, generated: new Map(fixtures.map(item => [item.name, item])), policy: {duplicateListenerNameRejected: true, wildcardHostRejected: true}};
+  const unsafeStaticRoot = composeNginxCapabilities(compositionRequest(version, [staticCapability('unsafe-root.example.com', '/fixtures/../secret')]));
+  assert.equal(unsafeStaticRoot.ok, false, 'Forge must reject traversal in a static document root');
+  const unsafeStaticIndex = composeNginxCapabilities(compositionRequest(version, [{id: 'static-site', input: {domain: 'unsafe-index.example.com', documentRoot: '/fixtures/shared/static-standard', indexFile: '../index.html', spaFallback: false}}]));
+  assert.equal(unsafeStaticIndex.ok, false, 'Forge must reject traversal in a static index filename');
+  const staticProxyConflict = composeNginxCapabilities(compositionRequest(version, [staticCapability('app.example.com', '/fixtures/shared/static-standard'), proxy]));
+  assert.equal(staticProxyConflict.ok, false, 'Forge must reject static and proxy ownership of the root location');
+  const staticWebSocketConflict = composeNginxCapabilities(compositionRequest(version, [staticCapability('app.example.com', '/fixtures/shared/static-standard', true), proxy, websocketRoot]));
+  assert.equal(staticWebSocketConflict.ok, false, 'Forge must reject SPA fallback combined with proxy/WebSocket root ownership');
+  return {fixtures, generated: new Map(fixtures.map(item => [item.name, item])), policy: {
+    duplicateListenerNameRejected: true,
+    wildcardHostRejected: true,
+    unsafeStaticRootRejected: true,
+    unsafeStaticIndexRejected: true,
+    staticProxyRootConflictRejected: true,
+    staticWebSocketConflictRejected: true,
+  }};
 }
 
 async function materializeComposition(root, name, result, profile) {
@@ -213,6 +256,16 @@ async function materializeNegative(root, generated) {
       name: 'unsupported-directive', source: 'http-reverse-proxy',
       mutate: content => content.replace('http {', 'http {\n  forge_missing_module_directive on;'),
       expected: ['unknown directive "forge_missing_module_directive"'],
+    },
+    {
+      name: 'malformed-static-try-files', source: 'static-website',
+      mutate: content => content.replace('try_files $uri $uri/ =404;', 'try_files;'),
+      expected: ['invalid number of arguments in "try_files" directive'],
+    },
+    {
+      name: 'duplicate-static-root', source: 'static-website',
+      mutate: content => content.replace('root /fixtures/shared/static-standard;', 'root /fixtures/shared/static-standard;\n        root /fixtures/shared/static-spa;'),
+      expected: ['"root" directive is duplicate'],
     },
   ];
   const fixtures = [];
@@ -342,6 +395,12 @@ async function main() {
     requireSuccess(certificate, 'Disposable certificate generation');
     const secondCertificate = await runProcess('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-keyout', join(shared, 'key-two.pem'), '-out', join(shared, 'cert-two.pem'), '-subj', '/CN=bravo-tls.example.com']);
     requireSuccess(secondCertificate, 'Second disposable certificate generation');
+    for (const name of ['static-standard', 'static-spa']) {
+      const directory = join(shared, name);
+      await mkdir(directory, {recursive: true});
+      await writeFile(join(directory, 'index.html'), `<!doctype html><title>${name}</title>\n`, {encoding: 'utf8', mode: 0o600});
+      await writeFile(join(directory, 'app.js'), 'globalThis.forgeStaticFixture = true;\n', {encoding: 'utf8', mode: 0o600});
+    }
 
     const {fixtures: positive, generated, policy} = await materializePositive(root, options.expectedVersion);
     report.forgePolicy = policy;
