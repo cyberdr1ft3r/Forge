@@ -34,6 +34,21 @@ jobs:
           node --check tests/nginx-composition.test.js
       - name: Unit tests
         run: npm test
+      - name: Native Nginx parser fixtures
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl
+          export FORGE_NGINX_FIXTURES=/tmp/forge-nginx-fixtures
+          mkdir -p "$FORGE_NGINX_FIXTURES"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$FORGE_NGINX_FIXTURES/key.pem" \
+            -out "$FORGE_NGINX_FIXTURES/cert.pem" \
+            -subj '/CN=app.example.com' >/dev/null 2>&1
+          node tests/nginx-native-fixtures.mjs
+          for scenario in http tls websocket bundle; do
+            echo "Checking native Nginx parser: $scenario"
+            sudo nginx -t -p "$FORGE_NGINX_FIXTURES/$scenario/" -c "$FORGE_NGINX_FIXTURES/$scenario/nginx.conf"
+          done
       - name: HTTP smoke test
         run: |
           npm run dev > /tmp/forge-server.log 2>&1 &
