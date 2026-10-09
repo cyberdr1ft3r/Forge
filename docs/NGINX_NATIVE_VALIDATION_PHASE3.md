@@ -66,7 +66,7 @@ Negative fixtures are clearly labelled test-only mutations of a known-good artif
 
 Assertions match stable, meaningful fragments such as `directive is not allowed here`, `directive is duplicate`, `invalid number of arguments`, `cannot load certificate`, and `unknown directive`. Complete stderr text, process IDs, and temporary paths are intentionally not snapshot-tested.
 
-The harness also records a separate policy-warning fixture: Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. This evidence is neither counted as a native parser failure nor presented as a supported Forge configuration. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
+The harness also records separate policy evidence. Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. Both tested Nginx lines also accept two contradictory maps targeting the same variable; Forge rejects that semantic shared-resource conflict before serialization. These cases are neither counted as native parser failures nor presented as supported Forge configurations. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
 ## Isolation and threat model
 

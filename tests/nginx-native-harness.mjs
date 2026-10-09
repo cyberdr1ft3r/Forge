@@ -232,9 +232,6 @@ async function materializeNegative(root, generated) {
   await writeFile(join(includeFixture.directory, 'site.conf'), bundleSite, {encoding: 'utf8', mode: 0o600});
   fixtures.push(includeFixture);
   fixtures.push(await writeNegative(root, 'invalid-site-fragment-assembly', bundleSite, 'site-fragment-bundle', ['"server" directive is not allowed here']));
-  const sharedConflictSource = await source('multi-websocket-sites');
-  const contradictoryShared = sharedConflictSource.replace('    server {', '    map $http_upgrade $connection_upgrade {\n        default close;\n    }\n\n    server {');
-  fixtures.push(await writeNegative(root, 'contradictory-shared-http-resource', contradictoryShared, 'multi-websocket-sites', ['duplicate "connection_upgrade" variable']));
   return fixtures;
 }
 
@@ -306,12 +303,24 @@ async function materializePolicyWarning(root, generated) {
   return {name: 'nginx-warning-forge-policy-rejects', directory, config, profile: 'deliberately-ambiguous-mutation', source: 'warning mutation of multi-http-sites', expected: ['conflicting server name']};
 }
 
+async function materializeParserAcceptedPolicyRejection(root, generated) {
+  const sourceFixture = generated.get('multi-websocket-sites');
+  const original = await readFile(sourceFixture.config, 'utf8');
+  const content = original.replace('    server {', '    map $http_upgrade $connection_upgrade {\n        default close;\n    }\n\n    server {');
+  assert.notEqual(content, original, 'shared-resource policy fixture did not create a contradictory duplicate map');
+  const directory = join(root, 'parser-accepts-forge-shared-conflict');
+  await mkdir(directory, {recursive: true});
+  const config = join(directory, 'nginx.conf');
+  await writeFile(config, content, {encoding: 'utf8', mode: 0o600});
+  return {name: 'parser-accepts-forge-shared-conflict', directory, config, profile: 'deliberately-contradictory-mutation', source: 'policy mutation of multi-websocket-sites'};
+}
+
 async function main() {
   if (process.platform !== 'linux') throw new Error('Native Nginx validation is confined to an explicitly invoked Linux test environment.');
   const options = parseArguments(process.argv.slice(2));
   await mkdir(dirname(options.report), {recursive: true});
   const root = await mkdtemp(join(tmpdir(), 'forge-nginx-native-'));
-  const report = {schemaVersion: '1.1', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: [], policyWarnings: []};
+  const report = {schemaVersion: '1.1', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: [], policyWarnings: [], parserAcceptedPolicyRejections: []};
   try {
     const pull = await runProcess('docker', ['pull', options.image], {timeoutMs: PULL_TIMEOUT_MS});
     requireSuccess(pull, `Pull ${options.image}`);
@@ -338,6 +347,7 @@ async function main() {
     report.forgePolicy = policy;
     const negative = await materializeNegative(root, generated);
     const policyWarning = await materializePolicyWarning(root, generated);
+    const parserAcceptedPolicyRejection = await materializeParserAcceptedPolicyRejection(root, generated);
     for (const fixture of positive) {
       const result = await runNginx(options.image, root, fixture);
       report.positive.push(evidence(fixture, result));
@@ -356,8 +366,11 @@ async function main() {
     requireSuccess(warningResult, 'Nginx warning fixture accepted by parser');
     const warningOutput = `${warningResult.stderr}\n${warningResult.stdout}`.toLowerCase();
     for (const fragment of policyWarning.expected) assert.ok(warningOutput.includes(fragment), `Policy warning fixture did not emit: ${fragment}\n${warningResult.stderr}`);
+    const acceptedResult = await runNginx(options.image, root, parserAcceptedPolicyRejection);
+    report.parserAcceptedPolicyRejections.push({...evidence(parserAcceptedPolicyRejection, acceptedResult), forgePolicy: 'contradictory semantic shared resource rejected before serialization'});
+    requireSuccess(acceptedResult, 'Parser-accepted contradictory shared-resource fixture');
     report.status = 'passed';
-    console.log(`Native Nginx validation passed: ${positive.length} positive, ${negative.length} negative, and 1 parser-warning/policy-rejection fixture on ${report.nginxVersionOutput}.`);
+    console.log(`Native Nginx validation passed: ${positive.length} positive, ${negative.length} negative, 1 parser-warning/policy rejection, and 1 parser-accepted/Forge-rejected fixture on ${report.nginxVersionOutput}.`);
   } catch (error) {
     report.status = 'failed';
     report.failure = error instanceof Error ? error.message : String(error);
