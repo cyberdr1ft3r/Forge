@@ -1,9 +1,11 @@
 import type {Diagnostic} from '../core/types.js';
 import {validateArgument} from '../nginx-syntax/arguments.js';
-import {block, directive, mapEntry, nginxArgument as arg} from '../nginx-syntax/types.js';
+import {block, directive, FORGE_JSON_LOG_FORMAT_NAME, FORGE_JSON_LOG_FORMAT_TEMPLATE, mapEntry, nginxArgument as arg} from '../nginx-syntax/types.js';
 import type {NginxArgumentKind, NginxSourceProvenance} from '../nginx-syntax/types.js';
 import type {
   CapabilityValidation,
+  ErrorLogLevel,
+  LoggingInput,
   NginxCapabilityDefinition,
   NginxCapabilityId,
   ReverseProxyInput,
@@ -245,9 +247,87 @@ function validateStaticSite(input: unknown, path: string): CapabilityValidation<
   return success({domain: domain.value.toLowerCase(), documentRoot: documentRoot.value, indexFile: indexFile.value, spaFallback: spaFallback.value});
 }
 
+function validateLogging(input: unknown, path: string): CapabilityValidation<LoggingInput> {
+  const object = record(input, path, ['accessLog', 'accessLogPath', 'errorLogPath', 'errorLogLevel']);
+  if (!object.ok) return object;
+  if (object.value.accessLog !== 'combined' && object.value.accessLog !== 'forge-json' && object.value.accessLog !== 'off') {
+    return failure(inputError('composition.logging.access-preset', 'Access log must be combined, forge-json, or off.', `${path}.accessLog`));
+  }
+  let accessLogPath: string | undefined;
+  if (object.value.accessLog === 'off') {
+    if (object.value.accessLogPath !== undefined) return failure(inputError('composition.logging.access-path-unexpected', 'accessLogPath must be omitted when access logging is off.', `${path}.accessLogPath`));
+  } else {
+    const parsed = typedString(object.value.accessLogPath, 'file-path', 'Access log path', `${path}.accessLogPath`);
+    if (!parsed.ok) return parsed;
+    accessLogPath = parsed.value;
+  }
+  const errorLogPath = typedString(object.value.errorLogPath, 'file-path', 'Error log path', `${path}.errorLogPath`);
+  if (!errorLogPath.ok) return errorLogPath;
+  const errorLogLevel = object.value.errorLogLevel ?? 'error';
+  const supportedLevels: readonly ErrorLogLevel[] = ['info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg'];
+  if (typeof errorLogLevel !== 'string' || !supportedLevels.includes(errorLogLevel as ErrorLogLevel)) {
+    return failure(inputError('composition.logging.error-level', `Error log level must be one of: ${supportedLevels.join(', ')}.`, `${path}.errorLogLevel`));
+  }
+  if (accessLogPath === errorLogPath.value) return failure(inputError('composition.logging.path-conflict', 'Access and error logs must use different files.', path));
+  return object.value.accessLog === 'off'
+    ? success({accessLog: 'off', errorLogPath: errorLogPath.value, errorLogLevel: errorLogLevel as ErrorLogLevel})
+    : success({accessLog: object.value.accessLog, accessLogPath: accessLogPath as string, errorLogPath: errorLogPath.value, errorLogLevel: errorLogLevel as ErrorLogLevel});
+}
+
+function parentDirectory(path: string): string {
+  return path.slice(0, path.lastIndexOf('/')) || '/';
+}
+
 function source(id: NginxCapabilityId, version: string): NginxSourceProvenance {
   return {kind: 'capability', id, version};
 }
+
+const logging: NginxCapabilityDefinition<LoggingInput> = {
+  id: 'logging',
+  version: '4.2.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'accessLog', type: 'enum', required: true, values: ['combined', 'forge-json', 'off'], description: 'Built-in combined logging, the trusted Forge JSON preset, or explicit access-log disablement.'},
+    {name: 'accessLogPath', type: 'string', required: false, description: 'Required absolute destination when accessLog is enabled; omitted when off.'},
+    {name: 'errorLogPath', type: 'string', required: true, description: 'Absolute per-site error-log destination.'},
+    {name: 'errorLogLevel', type: 'enum', required: false, values: ['info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg'], description: 'Minimum error severity; defaults to error.'},
+  ]},
+  dependencies: [],
+  incompatibleWith: [],
+  requiresSiteOwner: true,
+  astSurface: {contexts: ['http', 'server'], directives: ['access_log', 'error_log', 'log_format'], blocks: []},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_log']}),
+  validate: validateLogging,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    const accessDirective = input.accessLog === 'off'
+      ? directive('access_log', [arg.keyword('off')], provenance)
+      : directive('access_log', [arg.filePath(input.accessLogPath), input.accessLog === 'combined' ? arg.keyword('combined') : arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME)], provenance);
+    const directories = [...new Set([...(input.accessLogPath === undefined ? [] : [parentDirectory(input.accessLogPath)]), parentDirectory(input.errorLogPath)])].sort((left, right) => left.localeCompare(right, 'en'));
+    return {
+      logging: {
+        source: provenance,
+        directives: [
+          accessDirective,
+          directive('error_log', [arg.filePath(input.errorLogPath), arg.keyword(input.errorLogLevel)], provenance),
+        ],
+      },
+      sharedHttpNodes: input.accessLog === 'forge-json' ? [
+        directive('log_format', [arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME), arg.keyword('escape=json'), arg.logFormatTemplate(FORGE_JSON_LOG_FORMAT_TEMPLATE)], provenance),
+      ] : [],
+      prerequisites: [
+        ...directories.map(path => ({code: 'composition.logging.directory', capabilityId: this.id, kind: 'directory' as const, description: 'The log directory must exist and allow the Nginx runtime to open and append to the configured files.', path})),
+        {code: 'composition.logging.rotation', capabilityId: this.id, kind: 'operator-action', description: 'Configure and verify external log rotation and retention; Forge does not manage either.'},
+        {code: 'composition.logging.capacity', capabilityId: this.id, kind: 'operator-action', description: 'Monitor log volume and filesystem capacity before and after rollout.'},
+        {code: 'composition.logging.access-control', capabilityId: this.id, kind: 'operator-action', description: 'Restrict log-file access and review privacy requirements because request URLs or paths may contain sensitive data.'},
+      ],
+      explanations: [
+        {code: `composition.logging.access.${input.accessLog}`, capabilityId: this.id, context: 'server', semanticIdentity: 'directive:access_log', message: input.accessLog === 'off' ? 'Access logging is explicitly disabled only for this site server context.' : `Access logging uses the trusted ${input.accessLog} preset at server scope.`},
+        {code: 'composition.logging.error', capabilityId: this.id, context: 'server', semanticIdentity: 'directive:error_log', message: `Error logging is scoped to this site at ${input.errorLogLevel} severity and above.`},
+        ...(input.accessLog === 'forge-json' ? [{code: 'composition.logging.format.json', capabilityId: this.id, context: 'http' as const, semanticIdentity: `log-format:${FORGE_JSON_LOG_FORMAT_NAME}`, message: 'One shared namespaced JSON access-log format uses Nginx escape=json handling and a fixed non-credential field set.'}] : []),
+      ],
+    };
+  },
+};
 
 const reverseProxy: NginxCapabilityDefinition<ReverseProxyInput> = {
   id: 'reverse-proxy',
@@ -481,7 +561,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const definitions = deepFreeze({reverseProxy, routing, staticSite, tls, upstreamLoadBalancing, websocket} as const);
+const definitions = deepFreeze({logging, reverseProxy, routing, staticSite, tls, upstreamLoadBalancing, websocket} as const);
 
 export function getCapabilityDefinition(id: string): NginxCapabilityDefinition | undefined {
   return Object.values(definitions).find(definition => definition.id === id);

@@ -54,4 +54,4 @@ Generation performs no network requests, backend probes, worker startup, deploym
 
 ## Remaining scope
 
-This shelf does not add active health checks, keepalive tuning, request retry policy, sticky sessions, hash/random selection, dynamic DNS, Nginx Plus controls, logging, caching, compression, rate limiting, UI changes, or deployment behavior. Those require separate reviewed work.
+This shelf does not add active health checks, keepalive tuning, request retry policy, sticky sessions, hash/random selection, dynamic DNS, Nginx Plus controls, caching, compression, rate limiting, UI changes, or deployment behavior. Logging is implemented separately by the Phase 4C shelf and does not alter upstream selection behavior.

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   block,
   directive,
+  FORGE_JSON_LOG_FORMAT_NAME,
+  FORGE_JSON_LOG_FORMAT_TEMPLATE,
   listBlockDefinitions,
   listDirectiveDefinitions,
   mapEntry,
@@ -50,8 +52,70 @@ test('trusted registries expose the supported Phase 1 surface without arbitrary 
   assert.deepEqual(listBlockDefinitions().map(item => item.blockType), ['events', 'http', 'map', 'upstream', 'server', 'location']);
   assert.ok(listDirectiveDefinitions().some(item => item.id === 'proxy_pass' && item.contexts.includes('location')));
   assert.ok(listDirectiveDefinitions().some(item => item.id === 'upstream_server' && item.nginxName === 'server'));
+  assert.ok(listDirectiveDefinitions().some(item => item.id === 'access_log' && item.contexts.includes('location')));
+  assert.ok(listDirectiveDefinitions().some(item => item.id === 'log_format' && item.contexts.length === 1 && item.contexts[0] === 'http'));
   assert.throws(() => { listDirectiveDefinitions()[0].nginxName = 'raw'; }, TypeError);
   assert.throws(() => { listBlockDefinitions()[0].parents.push('server'); }, TypeError);
+});
+
+test('trusted logging directives serialize deterministically with a fixed JSON preset', () => {
+  const document = fullDocument();
+  const http = document.children.find(node => node.kind === 'block' && node.blockType === 'http');
+  const server = http.children.find(node => node.kind === 'block' && node.blockType === 'server');
+  http.children.push(directive('log_format', [
+    arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME),
+    arg.keyword('escape=json'),
+    arg.logFormatTemplate(FORGE_JSON_LOG_FORMAT_TEMPLATE),
+  ], source));
+  server.children.push(
+    directive('access_log', [arg.filePath('/var/log/nginx/app.access.log'), arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME)], source),
+    directive('error_log', [arg.filePath('/var/log/nginx/app.error.log'), arg.keyword('warn')], source),
+  );
+  const result = serializeNginxDocument(document);
+  assert.equal(result.ok, true);
+  assert.match(result.artifacts[0].content, /log_format forge_json_v1 escape=json '\{"time":"\$time_iso8601"/);
+  assert.match(result.artifacts[0].content, /access_log \/var\/log\/nginx\/app\.access\.log forge_json_v1;/);
+  assert.match(result.artifacts[0].content, /error_log \/var\/log\/nginx\/app\.error\.log warn;/);
+
+  const disabled = {profile: 'site-fragment', source, children: [block('server', [], [
+    directive('access_log', [arg.keyword('off')], source),
+    directive('error_log', [arg.filePath('/var/log/nginx/app.error.log')], source),
+  ], source)]};
+  assert.equal(serializeNginxDocument(disabled).ok, true);
+});
+
+test('logging grammar rejects invalid contexts, shapes, names, templates, paths, and severities', () => {
+  const invalidNodes = [
+    directive('access_log', [arg.keyword('off'), arg.keyword('combined')], source),
+    directive('access_log', [arg.filePath('/var/log/nginx/access.log')], source),
+    directive('access_log', [arg.filePath('/var/log/nginx/access.log'), arg.logFormatName('custom')], source),
+    directive('error_log', [arg.filePath('/var/log/nginx/error.log'), arg.keyword('verbose')], source),
+    directive('error_log', [arg.filePath('/var/log/../error.log'), arg.keyword('error')], source),
+  ];
+  for (const node of invalidNodes) {
+    const result = serializeNginxDocument({profile: 'site-fragment', source, children: [block('server', [], [node], source)]});
+    assert.equal(result.ok, false, node.name);
+  }
+
+  const wrongContext = fullDocument();
+  const http = wrongContext.children.find(node => node.kind === 'block' && node.blockType === 'http');
+  const server = http.children.find(node => node.kind === 'block' && node.blockType === 'server');
+  server.children.push(directive('log_format', [arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME), arg.keyword('escape=json'), arg.logFormatTemplate(FORGE_JSON_LOG_FORMAT_TEMPLATE)], source));
+  assert.ok(validateNginxDocument(wrongContext).some(item => item.code === 'nginx.directive.context'));
+
+  const injectedTemplate = fullDocument();
+  const injectedHttp = injectedTemplate.children.find(node => node.kind === 'block' && node.blockType === 'http');
+  injectedHttp.children.push(directive('log_format', [arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME), arg.keyword('escape=json'), {kind: 'log-format-template', value: `${FORGE_JSON_LOG_FORMAT_TEMPLATE}; include /tmp/pwn`}], source));
+  assert.ok(validateNginxDocument(injectedTemplate).some(item => item.code === 'nginx.argument.invalid'));
+});
+
+test('duplicate trusted log-format declarations are rejected by semantic key', () => {
+  const document = fullDocument();
+  const http = document.children.find(node => node.kind === 'block' && node.blockType === 'http');
+  const format = () => directive('log_format', [arg.logFormatName(FORGE_JSON_LOG_FORMAT_NAME), arg.keyword('escape=json'), arg.logFormatTemplate(FORGE_JSON_LOG_FORMAT_TEMPLATE)], source);
+  http.children.push(format(), format());
+  const diagnostics = validateNginxDocument(document);
+  assert.ok(diagnostics.some(item => item.code === 'nginx.directive.duplicate'));
 });
 
 test('full configuration validates and serializes every supported context deterministically', () => {

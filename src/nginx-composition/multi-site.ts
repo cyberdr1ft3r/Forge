@@ -16,7 +16,7 @@ import type {
   PlannedRoute,
 } from './types.js';
 
-const ENGINE_VERSION = '2.2.0' as const;
+const ENGINE_VERSION = '2.3.0' as const;
 const MAX_SITES = 16;
 const MAX_TOTAL_ROUTES = 256;
 const SITE_ID = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -109,6 +109,7 @@ function scopeNode(node: NginxNode, siteId: string): NginxNode {
 function semanticIdentity(node: NginxNode): string {
   if (node.kind === 'block' && node.blockType === 'map') return `map:${String(node.header[1]?.value)}`;
   if (node.kind === 'block' && node.blockType === 'upstream') return `upstream:${String(node.header[0]?.value)}`;
+  if (node.kind === 'directive' && node.name === 'log_format') return `log-format:${String(node.args[0]?.value)}`;
   return `${node.kind}:${node.kind === 'directive' ? node.name : node.kind === 'block' ? node.blockType : String(node.key.value)}`;
 }
 
@@ -174,7 +175,13 @@ function planSite(id: string, capabilitiesInput: readonly unknown[], request: Ng
     serverDirectives: staticSite.serverDirectives.map(node => ({...node, source: scopeSource(node.source, id)})),
     rootLocation: scopeNode(staticSite.rootLocation, id),
   };
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite);
+  const logging = contributions.map(item => item.logging).find(value => value !== undefined);
+  const scopedLogging = logging === undefined ? undefined : {
+    ...logging,
+    source: scopeSource(logging.source, id),
+    directives: logging.directives.map(node => ({...node, source: scopeSource(node.source, id)})),
+  };
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite, scopedLogging);
   const explanations = contributions.flatMap(item => item.explanations ?? []).map(item => ({...item, siteId: id}));
   const prerequisites = contributions.flatMap(item => item.prerequisites ?? []).map(item => ({...item, siteId: id}));
   const shared = contributions.flatMap(item => item.sharedHttpNodes ?? []).map(node => ({node: scopeNode(node, id), siteId: id}));

@@ -77,6 +77,8 @@ Phase 4A adds native-negative mutations for malformed `try_files` arguments and 
 
 Phase 4B adds native-negative mutations for a malformed upstream weight, invalid `least_conn` context, and a duplicate upstream identity. Forge-level policy evidence separately records rejection of unresolved references, unsafe backend addresses, unsupported strategies, and contradictory cross-site upstream definitions. The parser container has no network, starts no workers, and never probes a backend, so this evidence is syntax compatibility rather than runtime load-balancing or health evidence.
 
+Phase 4C adds positive fixtures for built-in combined logging, explicit access-log disablement, the fixed JSON preset, error severities, TLS/WebSocket/static/upstream combinations, shared and different multi-site policies, and fragment assembly. Native-negative fixtures cover invalid directive placement, invalid error severity, unknown access formats, malformed format declarations, and duplicate format names. Forge-policy evidence separately records unsafe path, variable-path, and unsupported debug-level rejection. `nginx -t` may open configured log destinations in the isolated temporary filesystem, but the harness starts no worker process and generates no requests. It therefore does not verify line emission, JSON parsing by a consumer, runtime permissions, rotation, retention, disk capacity, or request-routing behavior.
+
 The harness also records separate policy evidence. Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. Both tested Nginx lines also accept two contradictory maps targeting the same variable; Forge rejects that semantic shared-resource conflict before serialization. These cases are neither counted as native parser failures nor presented as supported Forge configurations. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
 ## Isolation and threat model
@@ -114,7 +116,7 @@ Local/manual runs accept an exact patch tag such as `nginx:1.24.0`, optionally f
 
 `nginx -t` checks syntax and attempts to open referenced files; it does not prove routing behavior, DNS resolution, upstream reachability, live TLS negotiation, certificate suitability for production, runtime permissions, deployment safety, or service health. Target-host readiness requires a separate authorized workflow under Issue #3. Additional supported image lines or custom module combinations should be added only with explicit support policy and trustworthy reproducible images.
 
-Issue #14 Phase 4A adds the static website/SPA shelf and Phase 4B adds typed upstream load balancing. Later shelves must continue producing typed artifacts and add matching static and native fixtures. Logging, caching, compression, and rate limiting remain unimplemented.
+Issue #14 Phase 4A adds the static website/SPA shelf, Phase 4B adds typed upstream load balancing, and Phase 4C adds typed access/error logging. Later shelves must continue producing typed artifacts and add matching static and native fixtures. Caching, compression, and rate limiting remain unimplemented.
 
 ## Rollback
 

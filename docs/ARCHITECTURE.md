@@ -57,6 +57,8 @@ Issue #14 Phase 4A adds one `static-site` capability to the same registry and pl
 
 Issue #14 Phase 4B adds a typed `upstream-load-balancing` capability and a mutually exclusive upstream reference to the reverse-proxy contract. Trusted HTTP-level upstream blocks support weighted round robin, weighted least connections, bounded passive failure controls, backup servers, and disabled servers. Equivalent cross-site definitions deduplicate by semantic identity; contradictions fail closed. Existing direct reverse-proxy output is unchanged. See [`NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md`](NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md).
 
+Issue #14 Phase 4C adds a typed `logging` capability. It applies explicit access- and error-log policy to each Forge-owned server, supports the built-in `combined` format, explicit `access_log off`, and one fixed namespaced JSON preset. JSON format declarations are shared at HTTP scope and deduplicated semantically. File creation, permissions, rotation, retention, capacity monitoring, worker startup, and deployment remain operator responsibilities. See [`NGINX_LOGGING_PHASE4C.md`](NGINX_LOGGING_PHASE4C.md).
+
 ## Manifest and versioning
 
 Every manifest declares:
