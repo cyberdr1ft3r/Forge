@@ -95,12 +95,26 @@ export interface NginxCompositionRequest {
   readonly capabilities: readonly CapabilitySelection[];
 }
 
+export interface NginxSiteDefinition {
+  readonly id: string;
+  readonly capabilities: readonly CapabilitySelection[];
+}
+
+/** Additive multi-site API. The legacy NginxCompositionRequest remains unchanged. */
+export interface NginxMultiSiteCompositionRequest {
+  readonly profile: NginxOutputProfile;
+  readonly target: NginxTarget;
+  readonly sites: readonly NginxSiteDefinition[];
+}
+
 export interface CompositionExplanation {
   readonly code: string;
   readonly capabilityId: NginxCapabilityId;
   readonly message: string;
   readonly context: 'http' | 'server' | 'location' | 'artifact';
   readonly semanticIdentity?: string;
+  readonly siteId?: string;
+  readonly siteIds?: readonly string[];
 }
 
 export interface CompositionPrerequisite {
@@ -109,6 +123,7 @@ export interface CompositionPrerequisite {
   readonly kind: 'file' | 'module' | 'operator-action' | 'service';
   readonly description: string;
   readonly path?: string;
+  readonly siteId?: string;
 }
 
 export interface NginxCompositionSuccess {
@@ -121,9 +136,10 @@ export interface NginxCompositionSuccess {
   readonly provenance: {
     readonly generatedBy: 'Forge';
     readonly engine: 'nginx-capability-composition';
-    readonly version: '2.0.0';
+    readonly version: '2.0.0' | '2.1.0';
     readonly deterministic: true;
     readonly capabilities: readonly {readonly id: NginxCapabilityId; readonly version: string}[];
+    readonly sites?: readonly string[];
   };
 }
 

@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
-import {composeNginxCapabilities} from '../dist/nginx-composition/index.js';
+import {composeNginxCapabilities, composeNginxSites} from '../dist/nginx-composition/index.js';
 
 const PROCESS_TIMEOUT_MS = 30_000;
 const PULL_TIMEOUT_MS = 180_000;
@@ -76,6 +76,12 @@ function compose(request, name) {
   return result;
 }
 
+function composeSites(request, name) {
+  const result = composeNginxSites(request);
+  assert.equal(result.ok, true, `${name} multi-site composition failed: ${JSON.stringify(result.diagnostics)}`);
+  return result;
+}
+
 const proxy = {id: 'reverse-proxy', input: {domain: 'app.example.com', targetHost: '127.0.0.1', targetPort: 3000}};
 const routing = {id: 'routing', input: {routes: [
   {prefix: '/api/', targetHost: '127.0.0.1', targetPort: 8080, forwarding: 'preserve-prefix'},
@@ -94,6 +100,17 @@ function tls(redirectHttp) {
 
 function compositionRequest(version, capabilities, profile = 'full-config') {
   return {profile, target: {version, modules: REQUIRED_MODULES}, capabilities};
+}
+
+function multiRequest(version, sites, profile = 'full-config') {
+  return {profile, target: {version, modules: REQUIRED_MODULES}, sites};
+}
+
+function nativeSite(id, domain, port, extra = []) {
+  return {id, capabilities: [
+    {id: 'reverse-proxy', input: {domain, targetHost: '127.0.0.1', targetPort: port}},
+    ...extra,
+  ]};
 }
 
 async function materializePositive(root, version) {
@@ -120,7 +137,37 @@ async function materializePositive(root, version) {
   const reordered = compose(compositionRequest(version, [websocketRoutes, tls(true), routing, proxy]), 'determinism-b');
   assert.deepEqual(reordered.artifacts, ordered.artifacts, 'Equivalent selection orders must emit byte-identical artifacts');
   fixtures.push({...await materializeComposition(root, 'selection-order-determinism', ordered, 'full-config'), source: 'forge-composition-output', equivalentSelectionOrderVerified: true});
-  return {fixtures, generated: new Map(fixtures.map(item => [item.name, item]))};
+
+  const httpSites = [nativeSite('alpha', 'alpha.example.com', 3101), nativeSite('bravo', 'bravo.example.com', 3102)];
+  const multiHttp = composeSites(multiRequest(version, httpSites), 'multi-http-sites');
+  fixtures.push({...await materializeComposition(root, 'multi-http-sites', multiHttp, 'full-config'), source: 'forge-multi-site-output'});
+
+  const tlsSites = [
+    nativeSite('alpha-tls', 'alpha-tls.example.com', 3201, [{id: 'tls', input: {certificatePath: '/fixtures/shared/cert.pem', privateKeyPath: '/fixtures/shared/key.pem', redirectHttp: false}}]),
+    nativeSite('bravo-tls', 'bravo-tls.example.com', 3202, [{id: 'tls', input: {certificatePath: '/fixtures/shared/cert-two.pem', privateKeyPath: '/fixtures/shared/key-two.pem', redirectHttp: false}}]),
+  ];
+  fixtures.push({...await materializeComposition(root, 'multi-https-sites', composeSites(multiRequest(version, tlsSites), 'multi-https-sites'), 'full-config'), source: 'forge-multi-site-output'});
+
+  const websocketSites = [nativeSite('alpha-ws', 'alpha-ws.example.com', 3301, [websocketRoot]), nativeSite('bravo-ws', 'bravo-ws.example.com', 3302, [websocketRoot])];
+  const multiWebSocket = composeSites(multiRequest(version, websocketSites), 'multi-websocket-sites');
+  assert.equal((multiWebSocket.artifacts[0].content.match(/map \$http_upgrade/g) ?? []).length, 1, 'multi-site WebSocket map must be emitted once');
+  fixtures.push({...await materializeComposition(root, 'multi-websocket-sites', multiWebSocket, 'full-config'), source: 'forge-multi-site-output'});
+
+  const mixedSites = [httpSites[0], tlsSites[0], nativeSite('routed-ws', 'routed.example.com', 3401, [routing, websocketRoutes])];
+  fixtures.push({...await materializeComposition(root, 'multi-mixed-sites', composeSites(multiRequest(version, mixedSites), 'multi-mixed-sites'), 'full-config'), source: 'forge-multi-site-output'});
+  fixtures.push({...await materializeComposition(root, 'multi-site-fragment-bundle', composeSites(multiRequest(version, websocketSites, 'site-fragment'), 'multi-site-fragment-bundle'), 'site-fragment'), source: 'forge-multi-site-output'});
+
+  const reversed = composeSites(multiRequest(version, [...mixedSites].reverse()), 'multi-site-order-reversed');
+  const canonical = composeSites(multiRequest(version, mixedSites), 'multi-site-order-canonical');
+  assert.deepEqual(reversed.artifacts, canonical.artifacts, 'Equivalent site orders must emit byte-identical artifacts');
+  fixtures.push({...await materializeComposition(root, 'multi-site-order-determinism', canonical, 'full-config'), source: 'forge-multi-site-output', equivalentSelectionOrderVerified: true});
+
+  const duplicate = composeNginxSites(multiRequest(version, [nativeSite('one', 'duplicate.example.com', 3501), nativeSite('two', 'duplicate.example.com', 3502)]));
+  assert.equal(duplicate.ok, false, 'Forge must reject duplicate listener/server-name ownership');
+  assert.ok(duplicate.diagnostics.some(item => item.code === 'composition.server.conflict'));
+  const unsupported = composeNginxSites(multiRequest(version, [nativeSite('wildcard', '*.example.com', 3503)]));
+  assert.equal(unsupported.ok, false, 'Forge must reject unsupported wildcard server names');
+  return {fixtures, generated: new Map(fixtures.map(item => [item.name, item])), policy: {duplicateListenerNameRejected: true, wildcardHostRejected: true}};
 }
 
 async function materializeComposition(root, name, result, profile) {
@@ -128,7 +175,7 @@ async function materializeComposition(root, name, result, profile) {
   await mkdir(directory, {recursive: true});
   for (const output of result.artifacts) await writeFile(join(directory, output.filename), output.content, {encoding: 'utf8', mode: 0o600});
   if (profile === 'site-fragment') {
-    const wrapper = 'events {}\nhttp {\n  include /fixtures/site-fragment-bundle/http-shared.conf;\n  include /fixtures/site-fragment-bundle/site.conf;\n}\n';
+    const wrapper = `events {}\nhttp {\n  include /fixtures/${name}/http-shared.conf;\n  include /fixtures/${name}/site.conf;\n}\n`;
     await writeFile(join(directory, 'nginx.conf'), wrapper, {encoding: 'utf8', mode: 0o600});
   }
   return {name, directory, config: join(directory, 'nginx.conf'), profile};
@@ -185,6 +232,9 @@ async function materializeNegative(root, generated) {
   await writeFile(join(includeFixture.directory, 'site.conf'), bundleSite, {encoding: 'utf8', mode: 0o600});
   fixtures.push(includeFixture);
   fixtures.push(await writeNegative(root, 'invalid-site-fragment-assembly', bundleSite, 'site-fragment-bundle', ['"server" directive is not allowed here']));
+  const sharedConflictSource = await source('multi-websocket-sites');
+  const contradictoryShared = sharedConflictSource.replace('    server {', '    map $http_upgrade $connection_upgrade {\n        default close;\n    }\n\n    server {');
+  fixtures.push(await writeNegative(root, 'contradictory-shared-http-resource', contradictoryShared, 'multi-websocket-sites', ['duplicate "connection_upgrade" variable']));
   return fixtures;
 }
 
@@ -244,12 +294,24 @@ function evidence(fixture, result) {
   };
 }
 
+async function materializePolicyWarning(root, generated) {
+  const sourceFixture = generated.get('multi-http-sites');
+  const original = await readFile(sourceFixture.config, 'utf8');
+  const content = original.replace('server_name bravo.example.com;', 'server_name alpha.example.com;');
+  assert.notEqual(content, original, 'policy warning fixture did not create a duplicate server name');
+  const directory = join(root, 'nginx-warning-forge-policy-rejects');
+  await mkdir(directory, {recursive: true});
+  const config = join(directory, 'nginx.conf');
+  await writeFile(config, content, {encoding: 'utf8', mode: 0o600});
+  return {name: 'nginx-warning-forge-policy-rejects', directory, config, profile: 'deliberately-ambiguous-mutation', source: 'warning mutation of multi-http-sites', expected: ['conflicting server name']};
+}
+
 async function main() {
   if (process.platform !== 'linux') throw new Error('Native Nginx validation is confined to an explicitly invoked Linux test environment.');
   const options = parseArguments(process.argv.slice(2));
   await mkdir(dirname(options.report), {recursive: true});
   const root = await mkdtemp(join(tmpdir(), 'forge-nginx-native-'));
-  const report = {schemaVersion: '1.0', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: []};
+  const report = {schemaVersion: '1.1', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: [], policyWarnings: []};
   try {
     const pull = await runProcess('docker', ['pull', options.image], {timeoutMs: PULL_TIMEOUT_MS});
     requireSuccess(pull, `Pull ${options.image}`);
@@ -269,9 +331,13 @@ async function main() {
     await mkdir(shared, {recursive: true});
     const certificate = await runProcess('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-keyout', join(shared, 'key.pem'), '-out', join(shared, 'cert.pem'), '-subj', '/CN=app.example.com']);
     requireSuccess(certificate, 'Disposable certificate generation');
+    const secondCertificate = await runProcess('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-keyout', join(shared, 'key-two.pem'), '-out', join(shared, 'cert-two.pem'), '-subj', '/CN=bravo-tls.example.com']);
+    requireSuccess(secondCertificate, 'Second disposable certificate generation');
 
-    const {fixtures: positive, generated} = await materializePositive(root, options.expectedVersion);
+    const {fixtures: positive, generated, policy} = await materializePositive(root, options.expectedVersion);
+    report.forgePolicy = policy;
     const negative = await materializeNegative(root, generated);
+    const policyWarning = await materializePolicyWarning(root, generated);
     for (const fixture of positive) {
       const result = await runNginx(options.image, root, fixture);
       report.positive.push(evidence(fixture, result));
@@ -285,8 +351,13 @@ async function main() {
       const output = `${result.stderr}\n${result.stdout}`.toLowerCase();
       for (const fragment of fixture.expected) assert.ok(output.includes(fragment.toLowerCase()), `${fixture.name} did not fail for the intended reason: ${fragment}\n${result.stderr}`);
     }
+    const warningResult = await runNginx(options.image, root, policyWarning);
+    report.policyWarnings.push({...evidence(policyWarning, warningResult), expectedFragments: policyWarning.expected, forgePolicy: 'rejected before serialization'});
+    requireSuccess(warningResult, 'Nginx warning fixture accepted by parser');
+    const warningOutput = `${warningResult.stderr}\n${warningResult.stdout}`.toLowerCase();
+    for (const fragment of policyWarning.expected) assert.ok(warningOutput.includes(fragment), `Policy warning fixture did not emit: ${fragment}\n${warningResult.stderr}`);
     report.status = 'passed';
-    console.log(`Native Nginx validation passed: ${positive.length} positive and ${negative.length} negative fixtures on ${report.nginxVersionOutput}.`);
+    console.log(`Native Nginx validation passed: ${positive.length} positive, ${negative.length} negative, and 1 parser-warning/policy-rejection fixture on ${report.nginxVersionOutput}.`);
   } catch (error) {
     report.status = 'failed';
     report.failure = error instanceof Error ? error.message : String(error);
