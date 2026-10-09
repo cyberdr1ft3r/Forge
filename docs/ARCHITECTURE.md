@@ -55,6 +55,8 @@ The multi-site hardening increment adds the additive `composeNginxSites()` API. 
 
 Issue #14 Phase 4A adds one `static-site` capability to the same registry and planning pipeline. A static site can own a validated domain and root location, optionally use an SPA entry fallback, and compose with TLS without a fake upstream. Typed directory, filename, and `try_files` arguments prevent raw filesystem expressions or directive injection. See [`NGINX_STATIC_SITE_PHASE4A.md`](NGINX_STATIC_SITE_PHASE4A.md).
 
+Issue #14 Phase 4B adds a typed `upstream-load-balancing` capability and a mutually exclusive upstream reference to the reverse-proxy contract. Trusted HTTP-level upstream blocks support weighted round robin, weighted least connections, bounded passive failure controls, backup servers, and disabled servers. Equivalent cross-site definitions deduplicate by semantic identity; contradictions fail closed. Existing direct reverse-proxy output is unchanged. See [`NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md`](NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md).
+
 ## Manifest and versioning
 
 Every manifest declares:

@@ -87,6 +87,20 @@ function validUpstreamAddress(value: string): boolean {
   return validHost(match[1]) && validPort(match[2]);
 }
 
+function validUpstreamUrl(value: string): boolean {
+  return /^http:\/\/forge_[a-z][a-z0-9_]{0,62}\/?$/.test(value);
+}
+
+function validUpstreamParameter(value: string): boolean {
+  if (value === 'backup' || value === 'down') return true;
+  const match = /^(weight|max_fails|fail_timeout)=(\d+)(s)?$/.exec(value);
+  if (match === null || match[1] === undefined || match[2] === undefined) return false;
+  const amount = Number(match[2]);
+  if (match[1] === 'weight') return match[3] === undefined && amount >= 1 && amount <= 100;
+  if (match[1] === 'max_fails') return match[3] === undefined && amount >= 0 && amount <= 10;
+  return match[3] === 's' && amount >= 1 && amount <= 300;
+}
+
 function validLocationPrefix(value: string): boolean {
   return value.length <= 512
     && /^\/[A-Za-z0-9._~!&()+,=:@%/-]*$/.test(value)
@@ -139,8 +153,12 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
         : 'try_files fallback must be =404 or one safe absolute entry filename.';
     case 'proxy-url':
       return validProxyUrl(value) ? undefined : 'Proxy URL must be a literal http:// or https:// URL with a valid host, optional port, and safe path.';
+    case 'upstream-url':
+      return validUpstreamUrl(value) ? undefined : 'Upstream URL must reference a Forge-owned upstream identifier with an optional trailing slash.';
     case 'upstream-address':
       return validUpstreamAddress(value) ? undefined : 'Upstream address must be a host or bracketed IPv6 address with an optional valid port, without a scheme or path.';
+    case 'upstream-parameter':
+      return validUpstreamParameter(value) ? undefined : 'Upstream parameter must be a supported bounded weight, max_fails, fail_timeout, backup, or down value.';
     case 'location-prefix':
       return validLocationPrefix(value) ? undefined : 'Location prefix must be a literal absolute URI path without globs, regex modifiers, variables, traversal, or query syntax.';
     case 'header-name':

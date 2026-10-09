@@ -11,6 +11,8 @@ import type {
   RoutingInput,
   StaticSiteInput,
   TlsInput,
+  UpstreamBackendInput,
+  UpstreamLoadBalancingInput,
   WebSocketInput,
 } from './types.js';
 
@@ -48,6 +50,14 @@ function integerValue(value: unknown, label: string, path: string): CapabilityVa
   return success(value);
 }
 
+function boundedInteger(value: unknown, label: string, path: string, minimum: number, maximum: number, defaultValue?: number): CapabilityValidation<number> {
+  if (value === undefined && defaultValue !== undefined) return success(defaultValue);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    return failure(inputError('composition.input.integer', `${label} must be an integer between ${minimum} and ${maximum}.`, path));
+  }
+  return success(value);
+}
+
 function booleanValue(value: unknown, label: string, path: string, defaultValue: boolean): CapabilityValidation<boolean> {
   if (value === undefined) return success(defaultValue);
   return typeof value === 'boolean'
@@ -75,13 +85,86 @@ function target(value: unknown, path: string): CapabilityValidation<{readonly ho
 }
 
 function validateReverseProxy(input: unknown, path: string): CapabilityValidation<ReverseProxyInput> {
-  const object = record(input, path, ['domain', 'targetHost', 'targetPort']);
+  const object = record(input, path, ['domain', 'targetHost', 'targetPort', 'upstreamId']);
   if (!object.ok) return object;
   const domain = typedString(object.value.domain, 'domain', 'Domain', `${path}.domain`);
   if (!domain.ok) return domain;
+  const hasDirectField = object.value.targetHost !== undefined || object.value.targetPort !== undefined;
+  const hasUpstream = object.value.upstreamId !== undefined;
+  if (hasDirectField === hasUpstream) {
+    return failure(inputError('composition.proxy.target-choice', 'Choose exactly one proxy target: targetHost with targetPort, or upstreamId.', path));
+  }
+  if (hasUpstream) {
+    const upstreamId = typedString(object.value.upstreamId, 'identifier', 'Upstream ID', `${path}.upstreamId`);
+    if (!upstreamId.ok || !/^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$/.test(upstreamId.value)) {
+      return failure(inputError('composition.upstream.id', 'Upstream ID must be 1-31 lowercase letters, digits, or internal hyphens and begin with a letter.', `${path}.upstreamId`));
+    }
+    return success({domain: domain.value.toLowerCase(), upstreamId: upstreamId.value});
+  }
   const parsedTarget = target({targetHost: object.value.targetHost, targetPort: object.value.targetPort}, path);
   if (!parsedTarget.ok) return parsedTarget;
   return success({domain: domain.value.toLowerCase(), targetHost: parsedTarget.value.host, targetPort: parsedTarget.value.port});
+}
+
+function upstreamNginxName(upstreamId: string): string {
+  return `forge_${upstreamId.replaceAll('-', '_')}`;
+}
+
+function validateUpstreamBackend(value: unknown, path: string): CapabilityValidation<UpstreamBackendInput> {
+  const object = record(value, path, ['host', 'port', 'weight', 'maxFails', 'failTimeoutSeconds', 'backup', 'down']);
+  if (!object.ok) return object;
+  const parsedTarget = target({targetHost: object.value.host, targetPort: object.value.port}, path);
+  if (!parsedTarget.ok) return parsedTarget;
+  const weight = boundedInteger(object.value.weight, 'Backend weight', `${path}.weight`, 1, 100, 1);
+  if (!weight.ok) return weight;
+  const maxFails = boundedInteger(object.value.maxFails, 'Backend maxFails', `${path}.maxFails`, 0, 10, 1);
+  if (!maxFails.ok) return maxFails;
+  const failTimeoutSeconds = boundedInteger(object.value.failTimeoutSeconds, 'Backend failTimeoutSeconds', `${path}.failTimeoutSeconds`, 1, 300, 10);
+  if (!failTimeoutSeconds.ok) return failTimeoutSeconds;
+  const backup = booleanValue(object.value.backup, 'Backend backup', `${path}.backup`, false);
+  if (!backup.ok) return backup;
+  const down = booleanValue(object.value.down, 'Backend down', `${path}.down`, false);
+  if (!down.ok) return down;
+  if (backup.value && down.value) return failure(inputError('composition.upstream.backend-state', 'A backend cannot be both backup and down.', path));
+  return success({host: parsedTarget.value.host, port: parsedTarget.value.port, weight: weight.value, maxFails: maxFails.value, failTimeoutSeconds: failTimeoutSeconds.value, backup: backup.value, down: down.value});
+}
+
+function validateUpstreamLoadBalancing(input: unknown, path: string): CapabilityValidation<UpstreamLoadBalancingInput> {
+  const object = record(input, path, ['upstreamId', 'strategy', 'backends']);
+  if (!object.ok) return object;
+  const upstreamId = stringValue(object.value.upstreamId, 'Upstream ID', `${path}.upstreamId`);
+  if (!upstreamId.ok || !/^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$/.test(upstreamId.value)) {
+    return failure(inputError('composition.upstream.id', 'Upstream ID must be 1-31 lowercase letters, digits, or internal hyphens and begin with a letter.', `${path}.upstreamId`));
+  }
+  const strategy = object.value.strategy ?? 'round-robin';
+  if (strategy !== 'round-robin' && strategy !== 'least-connections') {
+    return failure(inputError('composition.upstream.strategy', 'Strategy must be round-robin or least-connections.', `${path}.strategy`));
+  }
+  if (!Array.isArray(object.value.backends) || object.value.backends.length < 2 || object.value.backends.length > 16) {
+    return failure(inputError('composition.upstream.backends', 'Upstream load balancing requires between 2 and 16 backends.', `${path}.backends`));
+  }
+  const backends: UpstreamBackendInput[] = [];
+  const addresses = new Set<string>();
+  const nginxName = upstreamNginxName(upstreamId.value);
+  for (let index = 0; index < object.value.backends.length; index += 1) {
+    const backend = validateUpstreamBackend(object.value.backends[index], `${path}.backends[${index}]`);
+    if (!backend.ok) return backend;
+    const address = `${backend.value.host}:${backend.value.port}`;
+    if (addresses.has(address)) return failure(inputError('composition.upstream.backend-duplicate', `Backend ${address} is duplicated.`, `${path}.backends[${index}]`));
+    if (backend.value.host === nginxName || backend.value.host === upstreamId.value) {
+      return failure(inputError('composition.upstream.name-collision', `Backend host ${backend.value.host} collides with the upstream identity.`, `${path}.backends[${index}].host`));
+    }
+    addresses.add(address);
+    backends.push(backend.value);
+  }
+  if (backends.filter(backend => !backend.down).length < 2) {
+    return failure(inputError('composition.upstream.available-backends', 'At least two backends must not be marked down; Nginx ignores passive failure controls for an effectively single-server group.', `${path}.backends`));
+  }
+  if (!backends.some(backend => !backend.down && !backend.backup)) {
+    return failure(inputError('composition.upstream.primary-backend', 'At least one backend must be an enabled primary server.', `${path}.backends`));
+  }
+  backends.sort((left, right) => `${left.host}:${left.port}`.localeCompare(`${right.host}:${right.port}`, 'en'));
+  return success({upstreamId: upstreamId.value, strategy, backends});
 }
 
 function validateRoute(value: unknown, path: string): CapabilityValidation<RouteInput> {
@@ -168,11 +251,12 @@ function source(id: NginxCapabilityId, version: string): NginxSourceProvenance {
 
 const reverseProxy: NginxCapabilityDefinition<ReverseProxyInput> = {
   id: 'reverse-proxy',
-  version: '2.0.0',
-  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+  version: '2.1.0',
+  inputSchema: {version: '1.1', additionalProperties: false, fields: [
     {name: 'domain', type: 'string', required: true, description: 'Fully qualified server name.'},
-    {name: 'targetHost', type: 'string', required: true, description: 'Literal upstream hostname or IP address.'},
-    {name: 'targetPort', type: 'integer', required: true, description: 'Upstream TCP port.'},
+    {name: 'targetHost', type: 'string', required: false, description: 'Literal direct-target hostname or IP address; paired with targetPort.'},
+    {name: 'targetPort', type: 'integer', required: false, description: 'Direct-target TCP port; paired with targetHost.'},
+    {name: 'upstreamId', type: 'string', required: false, description: 'Reference to an explicitly selected upstream-load-balancing capability.'},
   ]},
   dependencies: [],
   incompatibleWith: [],
@@ -182,11 +266,58 @@ const reverseProxy: NginxCapabilityDefinition<ReverseProxyInput> = {
   validate: validateReverseProxy,
   contribute(input) {
     const provenance = source(this.id, this.version);
+    const plannedTarget = 'upstreamId' in input
+      ? {kind: 'upstream' as const, id: input.upstreamId, nginxName: upstreamNginxName(input.upstreamId)}
+      : {kind: 'direct' as const, host: input.targetHost, port: input.targetPort};
     return {
       domain: input.domain,
-      routes: [{prefix: '/', targetHost: input.targetHost, targetPort: input.targetPort, forwarding: 'preserve-prefix', source: provenance}],
+      routes: [{prefix: '/', target: plannedTarget, forwarding: 'preserve-prefix', source: provenance}],
       explanations: [{code: 'composition.proxy.route', capabilityId: this.id, context: 'location', semanticIdentity: 'location:prefix:/' , message: 'A root reverse-proxy route was added with prefix-preserving URI forwarding.'}],
       prerequisites: [{code: 'composition.proxy.service', capabilityId: this.id, kind: 'service', description: 'The configured upstream service must be reachable from Nginx.'}],
+    };
+  },
+};
+
+const upstreamLoadBalancing: NginxCapabilityDefinition<UpstreamLoadBalancingInput> = {
+  id: 'upstream-load-balancing',
+  version: '4.1.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'upstreamId', type: 'string', required: true, description: 'Stable logical identity rendered in the Forge-owned upstream namespace.'},
+    {name: 'strategy', type: 'enum', required: false, values: ['round-robin', 'least-connections'], description: 'Weighted round robin by default, or weighted least connections.'},
+    {name: 'backends', type: 'array', required: true, maximumItems: 16, description: 'Two to sixteen typed backend server definitions.'},
+  ]},
+  dependencies: ['reverse-proxy'],
+  incompatibleWith: ['static-site'],
+  requiresSiteOwner: false,
+  astSurface: {contexts: ['http', 'upstream'], directives: ['least_conn', 'server'], blocks: ['upstream']},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: []}),
+  validate: validateUpstreamLoadBalancing,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    const children = [
+      ...(input.strategy === 'least-connections' ? [directive('least_conn', [], provenance)] : []),
+      ...input.backends.map(backend => {
+        const parameters = [
+          ...(backend.weight === 1 ? [] : [arg.upstreamParameter(`weight=${backend.weight}`)]),
+          arg.upstreamParameter(`max_fails=${backend.maxFails}`),
+          arg.upstreamParameter(`fail_timeout=${backend.failTimeoutSeconds}s`),
+          ...(backend.backup ? [arg.upstreamParameter('backup')] : []),
+          ...(backend.down ? [arg.upstreamParameter('down')] : []),
+        ];
+        return directive('upstream_server', [arg.upstreamAddress(`${backend.host}:${backend.port}`), ...parameters], provenance);
+      }),
+    ];
+    const nginxName = upstreamNginxName(input.upstreamId);
+    return {
+      sharedHttpNodes: [block('upstream', [arg.identifier(nginxName)], children, provenance)],
+      prerequisites: [
+        {code: 'composition.upstream.reachability', capabilityId: this.id, kind: 'service', description: 'Every enabled backend must be reachable from the Nginx host; Forge does not probe backend health.'},
+        {code: 'composition.upstream.failure-policy', capabilityId: this.id, kind: 'operator-action', description: 'Validate passive failure thresholds and load distribution under representative production traffic before rollout.'},
+      ],
+      explanations: [
+        {code: `composition.upstream.strategy.${input.strategy}`, capabilityId: this.id, context: 'upstream', semanticIdentity: `upstream:${nginxName}`, message: input.strategy === 'least-connections' ? 'Requests use weighted least-connections selection; ties use weighted round robin.' : 'Requests use Nginx weighted round-robin selection.'},
+        {code: 'composition.upstream.passive-failures', capabilityId: this.id, context: 'upstream', semanticIdentity: `upstream:${nginxName}`, message: 'max_fails and fail_timeout provide passive failure handling based on proxy request failures; no active health checks are configured or implied.'},
+      ],
     };
   },
 };
@@ -206,7 +337,12 @@ const routing: NginxCapabilityDefinition<RoutingInput> = {
   contribute(input) {
     const provenance = source(this.id, this.version);
     return {
-      routes: input.routes.map(route => ({...route, source: provenance})),
+      routes: input.routes.map(route => ({
+        prefix: route.prefix,
+        target: {kind: 'direct' as const, host: route.targetHost, port: route.targetPort},
+        forwarding: route.forwarding,
+        source: provenance,
+      })),
       explanations: input.routes.map(route => ({
         code: `composition.route.${route.forwarding}`,
         capabilityId: this.id,
@@ -345,7 +481,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const definitions = deepFreeze({reverseProxy, routing, staticSite, tls, websocket} as const);
+const definitions = deepFreeze({reverseProxy, routing, staticSite, tls, upstreamLoadBalancing, websocket} as const);
 
 export function getCapabilityDefinition(id: string): NginxCapabilityDefinition | undefined {
   return Object.values(definitions).find(definition => definition.id === id);

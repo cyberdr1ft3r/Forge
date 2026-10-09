@@ -145,6 +145,17 @@ function validateNode(node: unknown, parent: NginxContext, path: string): readon
     if (definition === undefined) return [...diagnostics, error('nginx.directive.unsupported', `Unsupported directive: ${String((candidate as {name?: unknown}).name)}.`, `${path}.name`)];
     if (!definition.contexts.includes(parent)) diagnostics.push(error('nginx.directive.context', `${definition.nginxName} is not allowed in ${parent} context.`, path));
     diagnostics.push(...validateArguments((candidate as {args?: unknown}).args, definition.arguments, `${path}.args`));
+    if (definition.id === 'upstream_server' && Array.isArray((candidate as {args?: unknown}).args)) {
+      const values = ((candidate as {args: readonly unknown[]}).args).slice(1).map(argumentValueIdentity);
+      const parameterKeys = new Map<string, number>();
+      values.forEach((value, index) => {
+        const key = value.split('=', 1)[0] ?? value;
+        const first = parameterKeys.get(key);
+        if (first !== undefined) diagnostics.push(error('nginx.upstream.parameter-duplicate', `Duplicate upstream server parameter ${key}; first declared at ${path}.args[${first + 1}].`, `${path}.args[${index + 1}]`));
+        else parameterKeys.set(key, index);
+      });
+      if (parameterKeys.has('backup') && parameterKeys.has('down')) diagnostics.push(error('nginx.upstream.backend-state', 'An upstream server cannot be both backup and down.', `${path}.args`));
+    }
     return diagnostics;
   }
 

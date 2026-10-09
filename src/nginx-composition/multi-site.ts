@@ -16,7 +16,7 @@ import type {
   PlannedRoute,
 } from './types.js';
 
-const ENGINE_VERSION = '2.1.0' as const;
+const ENGINE_VERSION = '2.2.0' as const;
 const MAX_SITES = 16;
 const MAX_TOTAL_ROUTES = 256;
 const SITE_ID = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -108,6 +108,7 @@ function scopeNode(node: NginxNode, siteId: string): NginxNode {
 
 function semanticIdentity(node: NginxNode): string {
   if (node.kind === 'block' && node.blockType === 'map') return `map:${String(node.header[1]?.value)}`;
+  if (node.kind === 'block' && node.blockType === 'upstream') return `upstream:${String(node.header[0]?.value)}`;
   return `${node.kind}:${node.kind === 'directive' ? node.name : node.kind === 'block' ? node.blockType : String(node.key.value)}`;
 }
 
@@ -242,7 +243,7 @@ export function composeNginxSites(request: unknown): NginxCompositionOutcome {
   const prerequisites = plans.flatMap(plan => plan.prerequisites);
   if (!merged.ok) return failure(merged.diagnostics, plans, explanations, prerequisites, true);
   for (const resource of merged.resources) {
-    const representative = explanations.find(item => item.context === 'http' && item.semanticIdentity === resource.identity);
+    const representative = explanations.find(item => item.semanticIdentity === resource.identity && (item.context === 'http' || item.context === 'upstream'));
     if (representative !== undefined && resource.siteIds.length > 1) {
       const {siteId: _siteId, ...sharedExplanation} = representative;
       explanations.push({...sharedExplanation, code: 'composition.shared.dependencies', siteIds: resource.siteIds, message: `Shared HTTP resource ${resource.identity} is emitted once for sites ${resource.siteIds.join(', ')}.`});

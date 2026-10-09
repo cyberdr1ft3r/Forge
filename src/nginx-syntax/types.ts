@@ -13,10 +13,12 @@ export type NginxArgumentKind =
   | 'file-path'
   | 'index-file'
   | 'proxy-url'
+  | 'upstream-url'
   | 'redirect-url'
   | 'try-file-candidate'
   | 'try-file-fallback'
   | 'upstream-address'
+  | 'upstream-parameter'
   | 'location-prefix'
   | 'variable'
   | 'keyword'
@@ -53,6 +55,7 @@ export type KnownDirectiveName =
   | 'include'
   | 'index'
   | 'keepalive'
+  | 'least_conn'
   | 'listen'
   | 'pid'
   | 'proxy_pass'
@@ -125,10 +128,12 @@ export const nginxArgument = Object.freeze({
   filePath: (value: string): NginxArgument => ({kind: 'file-path', value}),
   indexFile: (value: string): NginxArgument => ({kind: 'index-file', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
+  upstreamUrl: (value: string): NginxArgument => ({kind: 'upstream-url', value}),
   redirectUrl: (value: string): NginxArgument => ({kind: 'redirect-url', value}),
   tryFileCandidate: (value: '$uri' | '$uri/'): NginxArgument => ({kind: 'try-file-candidate', value}),
   tryFileFallback: (value: string): NginxArgument => ({kind: 'try-file-fallback', value}),
   upstreamAddress: (value: string): NginxArgument => ({kind: 'upstream-address', value}),
+  upstreamParameter: (value: string): NginxArgument => ({kind: 'upstream-parameter', value}),
   locationPrefix: (value: string): NginxArgument => ({kind: 'location-prefix', value}),
   variable: (value: KnownNginxVariable): NginxArgument => ({kind: 'variable', value}),
   keyword: (value: string): NginxArgument => ({kind: 'keyword', value}),
