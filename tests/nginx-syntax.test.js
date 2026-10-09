@@ -267,6 +267,41 @@ test('Phase 2 directives remain constrained to trusted contexts and argument gra
   assert.ok(validateNginxDocument(invalidContext).some(item => item.code === 'nginx.directive.context'));
 });
 
+test('Phase 4A static directives use closed path, filename, and try_files grammars', () => {
+  const staticSource = {kind: 'capability', id: 'static-site', version: '4.0.0'};
+  const staticDocument = fallback => ({profile: 'site-fragment', source, children: [block('server', [], [
+    directive('listen', [arg.integer(80)], staticSource),
+    directive('server_name', [arg.domain('static.example.com')], staticSource),
+    directive('root', [arg.directoryPath('/var/www/static-site')], staticSource),
+    directive('index', [arg.indexFile('index.html')], staticSource),
+    block('location', [arg.locationPrefix('/')], [
+      directive('try_files', [arg.tryFileCandidate('$uri'), arg.tryFileCandidate('$uri/'), arg.tryFileFallback(fallback)], staticSource),
+    ], staticSource),
+  ], staticSource)]});
+
+  assert.equal(serializeNginxDocument(staticDocument('=404')).ok, true);
+  assert.equal(serializeNginxDocument(staticDocument('/index.html')).ok, true);
+
+  const malformed = [
+    directive('root', [arg.directoryPath('/var/www/../secret')], staticSource),
+    directive('index', [arg.indexFile('../index.html')], staticSource),
+    directive('try_files', [arg.tryFileCandidate('$uri'), arg.tryFileCandidate('$uri/')], staticSource),
+    directive('try_files', [arg.tryFileCandidate('$uri'), {kind: 'try-file-candidate', value: '$uri;return'}, arg.tryFileFallback('=404')], staticSource),
+    directive('try_files', [arg.tryFileCandidate('$uri'), arg.tryFileCandidate('$uri/'), arg.tryFileFallback('/../secret')], staticSource),
+  ];
+  for (const node of malformed) {
+    const document = {profile: 'site-fragment', source, children: [block('server', [], [node], staticSource)]};
+    const diagnostics = validateNginxDocument(document);
+    assert.ok(diagnostics.some(item => item.code === 'nginx.argument.invalid' || item.code === 'nginx.argument.missing'));
+  }
+
+  const wrongContext = {profile: 'full-config', source, children: [
+    block('events', [], [directive('try_files', [arg.tryFileCandidate('$uri'), arg.tryFileCandidate('$uri/'), arg.tryFileFallback('=404')], staticSource)], source),
+    block('http', [], [], source),
+  ]};
+  assert.ok(validateNginxDocument(wrongContext).some(item => item.code === 'nginx.directive.context'));
+});
+
 test('HTTP fragments validate map placement without introducing a third document profile', () => {
   const websocketSource = {kind: 'capability', id: 'websocket', version: '2.0.0'};
   const result = serializeNginxHttpFragment([block('map', [arg.variable('$http_upgrade'), arg.variable('$connection_upgrade')], [

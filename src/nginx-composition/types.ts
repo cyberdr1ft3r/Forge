@@ -1,7 +1,7 @@
 import type {Diagnostic, OutputArtifact, ValidationSummary} from '../core/types.js';
 import type {DirectiveNode, NginxNode, NginxOutputProfile, NginxSourceProvenance} from '../nginx-syntax/types.js';
 
-export type NginxCapabilityId = 'reverse-proxy' | 'routing' | 'tls' | 'websocket';
+export type NginxCapabilityId = 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'websocket';
 export type NginxModule = 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
 
 export interface CapabilityInputFieldSchema {
@@ -57,12 +57,20 @@ export interface TlsContribution {
   readonly source: NginxSourceProvenance;
 }
 
+export interface StaticSiteContribution {
+  readonly serverDirectives: readonly DirectiveNode[];
+  readonly rootLocation: NginxNode;
+  readonly spaFallback: boolean;
+  readonly source: NginxSourceProvenance;
+}
+
 export interface CapabilityContribution {
   readonly domain?: string;
   readonly routes?: readonly PlannedRoute[];
   readonly tls?: TlsContribution;
   readonly websocketRoutes?: readonly string[];
   readonly sharedHttpNodes?: readonly NginxNode[];
+  readonly staticSite?: StaticSiteContribution;
   readonly prerequisites?: readonly CompositionPrerequisite[];
   readonly explanations?: readonly CompositionExplanation[];
 }
@@ -73,6 +81,8 @@ export interface NginxCapabilityDefinition<TInput = unknown> {
   readonly inputSchema: CapabilityInputSchema;
   readonly dependencies: readonly NginxCapabilityId[];
   readonly incompatibleWith: readonly NginxCapabilityId[];
+  /** True when this capability augments either trusted site owner instead of requiring one specific owner ID. */
+  readonly requiresSiteOwner: boolean;
   readonly astSurface: CapabilityAstSurface;
   requirements(input: TInput): CapabilityRequirement;
   validate(input: unknown, path: string): CapabilityValidation<TInput>;
@@ -120,7 +130,7 @@ export interface CompositionExplanation {
 export interface CompositionPrerequisite {
   readonly code: string;
   readonly capabilityId: NginxCapabilityId;
-  readonly kind: 'file' | 'module' | 'operator-action' | 'service';
+  readonly kind: 'directory' | 'file' | 'module' | 'operator-action' | 'service';
   readonly description: string;
   readonly path?: string;
   readonly siteId?: string;
@@ -180,6 +190,13 @@ export interface TlsInput {
 
 export interface WebSocketInput {
   readonly routes: readonly string[];
+}
+
+export interface StaticSiteInput {
+  readonly domain: string;
+  readonly documentRoot: string;
+  readonly indexFile: string;
+  readonly spaFallback: boolean;
 }
 
 export interface DependencyNode {

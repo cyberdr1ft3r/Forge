@@ -9,6 +9,7 @@ const allowedVariables = new Set<KnownNginxVariable>([
   '$remote_addr',
   '$request_uri',
   '$scheme',
+  '$uri',
 ]);
 
 const domainLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -33,6 +34,19 @@ function validFilePath(value: string): boolean {
     && /^\/[A-Za-z0-9_./-]*$/.test(value)
     && !value.includes('//')
     && !value.split('/').some(segment => segment === '.' || segment === '..');
+}
+
+function validDirectoryPath(value: string): boolean {
+  return value.length <= 512
+    && value !== '/'
+    && !value.endsWith('/')
+    && /^\/[A-Za-z0-9_./-]*$/.test(value)
+    && !value.includes('//')
+    && !value.split('/').some(segment => segment === '.' || segment === '..');
+}
+
+function validIndexFile(value: string): boolean {
+  return value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) && value !== '..';
 }
 
 function validHost(host: string): boolean {
@@ -105,14 +119,24 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return /^[A-Za-z_][A-Za-z0-9_-]{0,62}$/.test(value) ? undefined : 'Identifier contains unsupported characters or is too long.';
     case 'domain':
       return validDomain(value) ? undefined : 'Domain must be a fully qualified DNS name.';
+    case 'directory-path':
+      return validDirectoryPath(value) ? undefined : 'Directory path must be absolute, bounded, traversal-free, and contain no whitespace, variables, globs, empty segments, or trailing slash.';
     case 'path':
       return validPath(value) ? undefined : 'Path must be absolute, bounded, traversal-free, and contain only safe path or glob characters.';
     case 'file-path':
       return validFilePath(value) ? undefined : 'File path must be absolute, bounded, traversal-free, and contain no whitespace, globs, or empty segments.';
+    case 'index-file':
+      return validIndexFile(value) ? undefined : 'Index file must be one bounded filename containing only letters, digits, dots, underscores, or hyphens.';
     case 'redirect-url': {
       const match = /^https:\/\/([a-z0-9.-]+)\$request_uri$/.exec(value);
       return match !== null && validDomain(match[1] ?? '') ? undefined : 'Redirect URL must use a validated HTTPS domain followed by the literal $request_uri variable.';
     }
+    case 'try-file-candidate':
+      return value === '$uri' || value === '$uri/' ? undefined : 'try_files candidate must be the trusted $uri or $uri/ value.';
+    case 'try-file-fallback':
+      return value === '=404' || (/^\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) && value !== '/..')
+        ? undefined
+        : 'try_files fallback must be =404 or one safe absolute entry filename.';
     case 'proxy-url':
       return validProxyUrl(value) ? undefined : 'Proxy URL must be a literal http:// or https:// URL with a valid host, optional port, and safe path.';
     case 'upstream-address':

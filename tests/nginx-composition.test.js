@@ -33,6 +33,11 @@ const websocket = {
   input: {routes: ['/']},
 };
 
+const staticSite = (domain = 'static.example.com', overrides = {}) => ({
+  id: 'static-site',
+  input: {domain, documentRoot: '/var/www/static-site', indexFile: 'index.html', spaFallback: false, ...overrides},
+});
+
 const routing = {
   id: 'routing',
   input: {routes: [
@@ -150,13 +155,124 @@ test('multi-site expansion remains bounded', () => {
   assert.ok(result.diagnostics.some(item => item.code === 'composition.sites.count'));
 });
 
-test('capability registry is typed, versioned, immutable, and limited to the four Phase 2 shelves', () => {
+test('capability registry is typed, versioned, immutable, and adds only the Phase 4A static shelf', () => {
   const definitions = listCapabilityDefinitions();
-  assert.deepEqual(definitions.map(item => item.id).sort(), ['reverse-proxy', 'routing', 'tls', 'websocket']);
+  assert.deepEqual(definitions.map(item => item.id).sort(), ['reverse-proxy', 'routing', 'static-site', 'tls', 'websocket']);
   assert.ok(definitions.every(item => /^\d+\.\d+\.\d+$/.test(item.version)));
   assert.ok(definitions.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(definitions.every(item => item.astSurface.contexts.length > 0));
   assert.throws(() => { definitions[0].dependencies.push('tls'); }, TypeError);
+});
+
+test('static website emits typed root, index, MIME resources, and an explicit 404 fallback', () => {
+  const result = compose([staticSite()]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /include \/etc\/nginx\/mime\.types;/);
+  assert.match(content, /default_type application\/octet-stream;/);
+  assert.match(content, /server_name static\.example\.com;/);
+  assert.match(content, /root \/var\/www\/static-site;/);
+  assert.match(content, /index index\.html;/);
+  assert.match(content, /try_files \$uri \$uri\/ =404;/);
+  assert.ok(result.prerequisites.some(item => item.kind === 'directory' && item.path === '/var/www/static-site'));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.static.permissions'));
+  assert.equal(result.validation.targetHost.status, 'not-run');
+});
+
+test('SPA mode safely derives its entry fallback without claiming missing assets return 404', () => {
+  const result = compose([staticSite('spa.example.com', {indexFile: 'app-shell.html', spaFallback: true})]);
+  assert.equal(result.ok, true);
+  assert.match(result.artifacts[0].content, /try_files \$uri \$uri\/ \/app-shell\.html;/);
+  assert.doesNotMatch(result.artifacts[0].content, /=404;/);
+  assert.ok(result.explanations.some(item => item.code === 'composition.static.spa-fallback' && /internally redirect/.test(item.message)));
+});
+
+test('static site supports TLS and optional HTTP redirect without a fake proxy dependency', () => {
+  const result = compose([staticSite('secure-static.example.com'), {...tls, input: {...tls.input, redirectHttp: true}}]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /listen 443 ssl;/);
+  assert.match(content, /listen 80;/);
+  assert.match(content, /return 301 https:\/\/secure-static\.example\.com\$request_uri;/);
+  assert.equal((content.match(/root \/var\/www\/static-site;/g) ?? []).length, 1);
+});
+
+test('multi-site composition supports static, SPA, proxy, and WebSocket proxy sites together', () => {
+  const sites = [
+    {id: 'static', capabilities: [staticSite('static.example.com')]},
+    {id: 'spa', capabilities: [staticSite('spa.example.com', {documentRoot: '/srv/spa', spaFallback: true})]},
+    siteProxy('proxy', 'proxy.example.com'),
+    {id: 'socket', capabilities: [
+      {id: 'reverse-proxy', input: {domain: 'socket.example.com', targetHost: '127.0.0.1', targetPort: 3010}},
+      websocket,
+    ]},
+  ];
+  const first = composeSites(sites);
+  const second = composeSites([...sites].reverse());
+  assert.equal(first.ok, true);
+  assert.deepEqual(second.artifacts, first.artifacts);
+  const content = first.artifacts[0].content;
+  assert.equal((content.match(/include \/etc\/nginx\/mime\.types;/g) ?? []).length, 1);
+  assert.equal((content.match(/map \$http_upgrade \$connection_upgrade/g) ?? []).length, 1);
+  assert.match(content, /server_name static\.example\.com;/);
+  assert.match(content, /server_name proxy\.example\.com;/);
+});
+
+test('different static sites may deliberately share one document root', () => {
+  const result = composeSites([
+    {id: 'alpha', capabilities: [staticSite('alpha.example.com', {documentRoot: '/srv/shared'})]},
+    {id: 'bravo', capabilities: [staticSite('bravo.example.com', {documentRoot: '/srv/shared'})]},
+  ]);
+  assert.equal(result.ok, true);
+  assert.equal((result.artifacts[0].content.match(/root \/srv\/shared;/g) ?? []).length, 2);
+});
+
+test('static site fragments emit one ancillary MIME artifact with accurate ownership', () => {
+  const result = compose([staticSite()], 'site-fragment');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.artifacts.map(item => item.filename), ['site.conf', 'http-shared.conf']);
+  assert.match(result.artifacts[1].content, /include \/etc\/nginx\/mime\.types;/);
+  assert.ok(result.explanations.some(item => item.code === 'composition.artifact.http-shared' && item.capabilityId === 'static-site'));
+});
+
+test('static and proxy root ownership conflicts are rejected without changing route semantics', () => {
+  const sameDomain = compose([staticSite('app.example.com'), reverseProxy]);
+  assert.equal(sameDomain.ok, false);
+  assert.ok(sameDomain.diagnostics.some(item => item.code === 'composition.site.root-conflict'));
+
+  const differentDomain = compose([staticSite('static.example.com'), reverseProxy]);
+  assert.equal(differentDomain.ok, false);
+  assert.ok(differentDomain.diagnostics.some(item => item.code === 'composition.site.domain-conflict'));
+
+  const spaRoutes = compose([staticSite('app.example.com', {spaFallback: true}), reverseProxy, routing]);
+  assert.equal(spaRoutes.ok, false);
+  assert.ok(spaRoutes.diagnostics.some(item => item.code === 'composition.site.root-conflict'));
+});
+
+test('static-site input rejects unsafe roots, filenames, coercion, and directive injection', () => {
+  const invalidRoots = ['/', 'relative/site', '/var/www/', '/var//www', '/var/../secret', '/var/www/$root', '/var/www/*', '/var/www/site;return'];
+  for (const documentRoot of invalidRoots) {
+    const result = compose([staticSite('static.example.com', {documentRoot})]);
+    assert.equal(result.ok, false, documentRoot);
+    assert.deepEqual(result.artifacts, []);
+    assert.ok(result.diagnostics.some(item => item.code === 'composition.input.grammar'));
+  }
+  for (const indexFile of ['', '../index.html', '/index.html', 'folder/index.html', 'index.html;return', '$uri', 'a'.repeat(129)]) {
+    const result = compose([staticSite('static.example.com', {indexFile})]);
+    assert.equal(result.ok, false, indexFile);
+    assert.deepEqual(result.artifacts, []);
+  }
+  for (const spaFallback of ['true', 1, null, {}]) {
+    const result = compose([staticSite('static.example.com', {spaFallback})]);
+    assert.equal(result.ok, false, String(spaFallback));
+    assert.ok(result.diagnostics.some(item => item.code === 'composition.input.boolean'));
+  }
+});
+
+test('TLS without any trusted site owner remains invalid', () => {
+  const result = compose([tls]);
+  assert.equal(result.ok, false);
+  assert.ok(result.diagnostics.some(item => item.code === 'composition.dependency.site-owner'));
 });
 
 test('HTTP reverse proxy composes a validated deterministic full configuration', () => {

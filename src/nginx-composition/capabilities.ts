@@ -9,6 +9,7 @@ import type {
   ReverseProxyInput,
   RouteInput,
   RoutingInput,
+  StaticSiteInput,
   TlsInput,
   WebSocketInput,
 } from './types.js';
@@ -147,6 +148,20 @@ function validateWebSocket(input: unknown, path: string): CapabilityValidation<W
   return success({routes});
 }
 
+function validateStaticSite(input: unknown, path: string): CapabilityValidation<StaticSiteInput> {
+  const object = record(input, path, ['domain', 'documentRoot', 'indexFile', 'spaFallback']);
+  if (!object.ok) return object;
+  const domain = typedString(object.value.domain, 'domain', 'Domain', `${path}.domain`);
+  if (!domain.ok) return domain;
+  const documentRoot = typedString(object.value.documentRoot, 'directory-path', 'Document root', `${path}.documentRoot`);
+  if (!documentRoot.ok) return documentRoot;
+  const indexFile = typedString(object.value.indexFile, 'index-file', 'Index file', `${path}.indexFile`);
+  if (!indexFile.ok) return indexFile;
+  const spaFallback = booleanValue(object.value.spaFallback, 'SPA fallback', `${path}.spaFallback`, false);
+  if (!spaFallback.ok) return spaFallback;
+  return success({domain: domain.value.toLowerCase(), documentRoot: documentRoot.value, indexFile: indexFile.value, spaFallback: spaFallback.value});
+}
+
 function source(id: NginxCapabilityId, version: string): NginxSourceProvenance {
   return {kind: 'capability', id, version};
 }
@@ -161,6 +176,7 @@ const reverseProxy: NginxCapabilityDefinition<ReverseProxyInput> = {
   ]},
   dependencies: [],
   incompatibleWith: [],
+  requiresSiteOwner: false,
   astSurface: {contexts: ['server', 'location'], directives: ['listen', 'server_name', 'proxy_pass', 'proxy_http_version', 'proxy_set_header'], blocks: ['server', 'location']},
   requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_proxy']}),
   validate: validateReverseProxy,
@@ -183,6 +199,7 @@ const routing: NginxCapabilityDefinition<RoutingInput> = {
   ]},
   dependencies: ['reverse-proxy'],
   incompatibleWith: [],
+  requiresSiteOwner: false,
   astSurface: {contexts: ['server', 'location'], directives: ['proxy_pass', 'proxy_http_version', 'proxy_set_header'], blocks: ['location']},
   requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_proxy']}),
   validate: validateRouting,
@@ -203,6 +220,57 @@ const routing: NginxCapabilityDefinition<RoutingInput> = {
   },
 };
 
+const staticSite: NginxCapabilityDefinition<StaticSiteInput> = {
+  id: 'static-site',
+  version: '4.0.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'domain', type: 'string', required: true, description: 'Fully qualified server name.'},
+    {name: 'documentRoot', type: 'string', required: true, description: 'Absolute directory containing the deployed static assets.'},
+    {name: 'indexFile', type: 'string', required: true, description: 'Safe entry filename relative to the document root.'},
+    {name: 'spaFallback', type: 'boolean', required: false, description: 'Internally redirect unresolved routes to the entry file.'},
+  ]},
+  dependencies: [],
+  incompatibleWith: ['reverse-proxy', 'routing', 'websocket'],
+  requiresSiteOwner: false,
+  astSurface: {contexts: ['http', 'server', 'location'], directives: ['default_type', 'include', 'index', 'listen', 'root', 'server_name', 'try_files'], blocks: ['server', 'location']},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: []}),
+  validate: validateStaticSite,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    const fallback = input.spaFallback ? `/${input.indexFile}` : '=404';
+    return {
+      domain: input.domain,
+      staticSite: {
+        source: provenance,
+        spaFallback: input.spaFallback,
+        serverDirectives: [
+          directive('root', [arg.directoryPath(input.documentRoot)], provenance),
+          directive('index', [arg.indexFile(input.indexFile)], provenance),
+        ],
+        rootLocation: block('location', [arg.locationPrefix('/')], [
+          directive('try_files', [arg.tryFileCandidate('$uri'), arg.tryFileCandidate('$uri/'), arg.tryFileFallback(fallback)], provenance),
+        ], provenance),
+      },
+      sharedHttpNodes: [
+        directive('include', [arg.filePath('/etc/nginx/mime.types')], provenance),
+        directive('default_type', [arg.literal('application/octet-stream')], provenance),
+      ],
+      prerequisites: [
+        {code: 'composition.static.document-root', capabilityId: this.id, kind: 'directory', description: 'The document root must exist on the target host.', path: input.documentRoot},
+        {code: 'composition.static.permissions', capabilityId: this.id, kind: 'operator-action', description: 'Grant the Nginx worker read access to hosted files and traverse access to every parent directory.'},
+        {code: 'composition.static.index-file', capabilityId: this.id, kind: 'file', description: 'The configured index file must be deployed and readable by Nginx.', path: `${input.documentRoot}/${input.indexFile}`},
+        {code: 'composition.static.assets', capabilityId: this.id, kind: 'operator-action', description: 'Deploy the intended static asset set before enabling traffic.'},
+        {code: 'composition.static.mime-types', capabilityId: this.id, kind: 'file', description: 'The trusted MIME type mapping must exist and be readable by Nginx.', path: '/etc/nginx/mime.types'},
+      ],
+      explanations: [
+        {code: 'composition.static.root', capabilityId: this.id, context: 'server', semanticIdentity: 'location:prefix:/', message: 'A filesystem-backed root location serves assets from the validated document root.'},
+        {code: input.spaFallback ? 'composition.static.spa-fallback' : 'composition.static.not-found', capabilityId: this.id, context: 'location', semanticIdentity: 'try-files:root', message: input.spaFallback ? 'Unresolved URIs internally redirect to the configured SPA entry file after file and directory checks.' : 'Unresolved URIs return 404 after file and directory checks.'},
+        {code: 'composition.static.mime-types', capabilityId: this.id, context: 'http', semanticIdentity: 'directive:include', message: 'A trusted MIME type mapping is included once at HTTP scope for static asset responses.'},
+      ],
+    };
+  },
+};
+
 const tls: NginxCapabilityDefinition<TlsInput> = {
   id: 'tls',
   version: '2.0.0',
@@ -211,8 +279,9 @@ const tls: NginxCapabilityDefinition<TlsInput> = {
     {name: 'privateKeyPath', type: 'string', required: true, description: 'Existing PEM private-key file path.'},
     {name: 'redirectHttp', type: 'boolean', required: false, description: 'Create an HTTP server that redirects to the configured HTTPS server.'},
   ]},
-  dependencies: ['reverse-proxy'],
+  dependencies: [],
   incompatibleWith: [],
+  requiresSiteOwner: true,
   astSurface: {contexts: ['server'], directives: ['listen', 'return', 'ssl_certificate', 'ssl_certificate_key', 'ssl_protocols'], blocks: ['server']},
   requirements: input => ({minimumNginxVersion: '1.18.0', modules: input.redirectHttp ? ['http_ssl', 'http_rewrite'] : ['http_ssl']}),
   validate: validateTls,
@@ -248,6 +317,7 @@ const websocket: NginxCapabilityDefinition<WebSocketInput> = {
   ]},
   dependencies: ['reverse-proxy'],
   incompatibleWith: [],
+  requiresSiteOwner: false,
   astSurface: {contexts: ['http', 'location'], directives: ['proxy_http_version', 'proxy_set_header'], blocks: ['map']},
   requirements: () => ({minimumNginxVersion: '1.3.13', modules: ['http_map', 'http_proxy']}),
   validate: validateWebSocket,
@@ -275,7 +345,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const definitions = deepFreeze({reverseProxy, routing, tls, websocket} as const);
+const definitions = deepFreeze({reverseProxy, routing, staticSite, tls, websocket} as const);
 
 export function getCapabilityDefinition(id: string): NginxCapabilityDefinition | undefined {
   return Object.values(definitions).find(definition => definition.id === id);

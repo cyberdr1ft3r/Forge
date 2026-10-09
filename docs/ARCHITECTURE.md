@@ -53,6 +53,8 @@ Issue #14 Phase 3 adds a CI-only native validation harness and official-image co
 
 The multi-site hardening increment adds the additive `composeNginxSites()` API. It orders bounded site plans deterministically, deduplicates shared HTTP AST resources by semantic identity, rejects ambiguous listener/server-name ownership, and carries site provenance through diagnostics and explanations without changing the legacy single-site path. See [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
+Issue #14 Phase 4A adds one `static-site` capability to the same registry and planning pipeline. A static site can own a validated domain and root location, optionally use an SPA entry fallback, and compose with TLS without a fake upstream. Typed directory, filename, and `try_files` arguments prevent raw filesystem expressions or directive injection. See [`NGINX_STATIC_SITE_PHASE4A.md`](NGINX_STATIC_SITE_PHASE4A.md).
+
 ## Manifest and versioning
 
 Every manifest declares:
