@@ -56,6 +56,9 @@ Positive fixtures are unmodified Forge composition artifacts except for the expl
 - multiple static sites, static plus reverse proxy, static plus TLS, and static plus WebSocket proxy sites;
 - a static site-fragment bundle with one ancillary HTTP file;
 - byte-identical output from equivalent static-site order permutations.
+- weighted round-robin and weighted least-connections upstreams with passive failure parameters;
+- upstream composition with TLS and WebSocket handling;
+- equivalent shared upstreams, distinct upstreams, a mixed static/balanced-proxy configuration, and an upstream site-fragment bundle.
 
 Negative fixtures are clearly labelled test-only mutations of a known-good artifact. They verify native rejection of:
 
@@ -71,6 +74,8 @@ Negative fixtures are clearly labelled test-only mutations of a known-good artif
 Assertions match stable, meaningful fragments such as `directive is not allowed here`, `directive is duplicate`, `invalid number of arguments`, `cannot load certificate`, and `unknown directive`. Complete stderr text, process IDs, and temporary paths are intentionally not snapshot-tested.
 
 Phase 4A adds native-negative mutations for malformed `try_files` arguments and duplicate `root` declarations. Unsafe document roots, unsafe index filenames, duplicate site ownership, and unsupported static/proxy combinations are rejected by Forge before serialization and recorded as policy evidence. The harness creates disposable static fixture files only so referenced document roots are representative; it still runs `nginx -t` only. It does not start workers or claim HTTP file-serving behavior, SPA routing behavior, filesystem permissions, or MIME correctness on a user's host.
+
+Phase 4B adds native-negative mutations for a malformed upstream weight, invalid `least_conn` context, and a duplicate upstream identity. Forge-level policy evidence separately records rejection of unresolved references, unsafe backend addresses, unsupported strategies, and contradictory cross-site upstream definitions. The parser container has no network, starts no workers, and never probes a backend, so this evidence is syntax compatibility rather than runtime load-balancing or health evidence.
 
 The harness also records separate policy evidence. Nginx accepts a duplicate exact server name on one listener but warns that it is conflicting and ignored, while Forge rejects the request before serialization. Both tested Nginx lines also accept two contradictory maps targeting the same variable; Forge rejects that semantic shared-resource conflict before serialization. These cases are neither counted as native parser failures nor presented as supported Forge configurations. Multi-site behavior and remaining limits are documented in [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
@@ -109,7 +114,7 @@ Local/manual runs accept an exact patch tag such as `nginx:1.24.0`, optionally f
 
 `nginx -t` checks syntax and attempts to open referenced files; it does not prove routing behavior, DNS resolution, upstream reachability, live TLS negotiation, certificate suitability for production, runtime permissions, deployment safety, or service health. Target-host readiness requires a separate authorized workflow under Issue #3. Additional supported image lines or custom module combinations should be added only with explicit support policy and trustworthy reproducible images.
 
-Issue #14 Phase 4A adds only the static website/SPA shelf after the earlier human review. Later shelves must continue producing typed artifacts and add matching static and native fixtures. Load balancing, logging, caching, compression, and rate limiting remain unimplemented.
+Issue #14 Phase 4A adds the static website/SPA shelf and Phase 4B adds typed upstream load balancing. Later shelves must continue producing typed artifacts and add matching static and native fixtures. Logging, caching, compression, and rate limiting remain unimplemented.
 
 ## Rollback
 

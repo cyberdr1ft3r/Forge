@@ -193,6 +193,42 @@ test('upstream server requires an address and rejects URL or path syntax', () =>
   }
 });
 
+test('Phase 4B upstream directives accept only bounded typed parameters and Forge-owned references', () => {
+  const upstreamSource = {kind: 'capability', id: 'upstream-load-balancing', version: '4.1.0'};
+  const upstreamBlock = children => block('upstream', [arg.identifier('forge_app_pool')], children, upstreamSource);
+  const document = children => ({profile: 'full-config', source, children: [
+    block('events', [], [], source),
+    block('http', [], [upstreamBlock(children)], source),
+  ]});
+  const valid = document([
+    directive('least_conn', [], upstreamSource),
+    directive('upstream_server', [arg.upstreamAddress('[2001:db8::1]:8080'), arg.upstreamParameter('weight=100'), arg.upstreamParameter('max_fails=0'), arg.upstreamParameter('fail_timeout=300s')], upstreamSource),
+    directive('upstream_server', [arg.upstreamAddress('backend.internal:8080'), arg.upstreamParameter('backup')], upstreamSource),
+  ]);
+  assert.equal(serializeNginxDocument(valid).ok, true);
+
+  for (const parameter of ['weight=0', 'weight=101', 'max_fails=11', 'fail_timeout=0s', 'fail_timeout=301s', 'slow_start=5s', 'backup; include /tmp/x']) {
+    const invalid = document([directive('upstream_server', [arg.upstreamAddress('127.0.0.1:8080'), arg.upstreamParameter(parameter)], upstreamSource)]);
+    assert.ok(validateNginxDocument(invalid).some(item => item.code === 'nginx.argument.invalid'), parameter);
+  }
+  const duplicateParameter = document([directive('upstream_server', [arg.upstreamAddress('127.0.0.1:8080'), arg.upstreamParameter('weight=2'), arg.upstreamParameter('weight=3')], upstreamSource)]);
+  assert.ok(validateNginxDocument(duplicateParameter).some(item => item.code === 'nginx.upstream.parameter-duplicate'));
+  const contradictoryState = document([directive('upstream_server', [arg.upstreamAddress('127.0.0.1:8080'), arg.upstreamParameter('backup'), arg.upstreamParameter('down')], upstreamSource)]);
+  assert.ok(validateNginxDocument(contradictoryState).some(item => item.code === 'nginx.upstream.backend-state'));
+
+  const reference = value => ({profile: 'site-fragment', source, children: [block('server', [], [
+    block('location', [arg.locationPrefix('/')], [directive('proxy_pass', [arg.upstreamUrl(value)], upstreamSource)], upstreamSource),
+  ], upstreamSource)]});
+  assert.equal(serializeNginxDocument(reference('http://forge_app_pool')).ok, true);
+  assert.equal(serializeNginxDocument(reference('http://forge_app_pool/')).ok, true);
+  for (const value of ['http://app_pool', 'https://forge_app_pool', 'http://forge_app-pool', 'http://forge_app_pool/path', 'http://forge_app_pool;return']) {
+    assert.ok(validateNginxDocument(reference(value)).some(item => item.code === 'nginx.argument.invalid'), value);
+  }
+
+  const wrongContext = {profile: 'site-fragment', source, children: [block('server', [], [directive('least_conn', [], upstreamSource)], upstreamSource)]};
+  assert.ok(validateNginxDocument(wrongContext).some(item => item.code === 'nginx.directive.context'));
+});
+
 test('proxy URLs and upstream addresses strictly validate bracketed IPv6', () => {
   const proxyDocument = value => ({
     profile: 'site-fragment',

@@ -117,6 +117,17 @@ function staticCapability(domain, documentRoot, spaFallback = false) {
   return {id: 'static-site', input: {domain, documentRoot, indexFile: 'index.html', spaFallback}};
 }
 
+function upstreamProxy(domain = 'balanced.example.com', upstreamId = 'app-pool') {
+  return {id: 'reverse-proxy', input: {domain, upstreamId}};
+}
+
+function upstreamCapability(upstreamId = 'app-pool', strategy = 'round-robin', backends = [
+  {host: '127.0.0.1', port: 4101, weight: 3, maxFails: 2, failTimeoutSeconds: 15},
+  {host: '127.0.0.1', port: 4102, backup: true},
+]) {
+  return {id: 'upstream-load-balancing', input: {upstreamId, strategy, backends}};
+}
+
 async function materializePositive(root, version) {
   const definitions = [
     ['http-reverse-proxy', [proxy], 'full-config'],
@@ -190,6 +201,44 @@ async function materializePositive(root, version) {
   assert.deepEqual(staticOrderA.artifacts, staticOrderB.artifacts, 'Equivalent static-site orders must emit byte-identical artifacts');
   fixtures.push({...await materializeComposition(root, 'static-site-order-determinism', staticOrderA, 'full-config'), source: 'forge-static-site-output', equivalentSelectionOrderVerified: true});
 
+  const balancedProxy = upstreamProxy();
+  const roundRobin = upstreamCapability();
+  const leastConnections = upstreamCapability('least-pool', 'least-connections', [
+    {host: '127.0.0.1', port: 4201, weight: 4, maxFails: 0, failTimeoutSeconds: 30},
+    {host: '127.0.0.1', port: 4202},
+    {host: '127.0.0.1', port: 4203, down: true},
+  ]);
+  fixtures.push({...await materializeComposition(root, 'upstream-weighted-round-robin', compose(compositionRequest(version, [balancedProxy, roundRobin]), 'upstream-weighted-round-robin'), 'full-config'), source: 'forge-upstream-output'});
+  fixtures.push({...await materializeComposition(root, 'upstream-least-connections', compose(compositionRequest(version, [upstreamProxy('least.example.com', 'least-pool'), leastConnections]), 'upstream-least-connections'), 'full-config'), source: 'forge-upstream-output'});
+  fixtures.push({...await materializeComposition(root, 'upstream-tls-websocket', compose(compositionRequest(version, [balancedProxy, roundRobin, tls(false), websocketRoot]), 'upstream-tls-websocket'), 'full-config'), source: 'forge-upstream-output'});
+  fixtures.push({...await materializeComposition(root, 'upstream-site-fragment-bundle', compose(compositionRequest(version, [balancedProxy, roundRobin], 'site-fragment'), 'upstream-site-fragment-bundle'), 'site-fragment'), source: 'forge-upstream-output'});
+
+  const sharedUpstreamSites = [
+    {id: 'balanced-alpha', capabilities: [upstreamProxy('balanced-alpha.example.com'), roundRobin]},
+    {id: 'balanced-bravo', capabilities: [upstreamProxy('balanced-bravo.example.com'), roundRobin]},
+  ];
+  const sharedUpstream = composeSites(multiRequest(version, sharedUpstreamSites), 'multi-shared-upstream');
+  assert.equal((sharedUpstream.artifacts[0].content.match(/upstream forge_app_pool/g) ?? []).length, 1, 'shared upstream must be emitted once');
+  fixtures.push({...await materializeComposition(root, 'multi-shared-upstream', sharedUpstream, 'full-config'), source: 'forge-upstream-output'});
+  const distinctUpstreamSites = [
+    {id: 'pool-alpha', capabilities: [upstreamProxy('pool-alpha.example.com', 'alpha-pool'), upstreamCapability('alpha-pool')]},
+    {id: 'pool-bravo', capabilities: [upstreamProxy('pool-bravo.example.com', 'bravo-pool'), upstreamCapability('bravo-pool')]},
+  ];
+  fixtures.push({...await materializeComposition(root, 'multi-distinct-upstreams', composeSites(multiRequest(version, distinctUpstreamSites), 'multi-distinct-upstreams'), 'full-config'), source: 'forge-upstream-output'});
+  fixtures.push({...await materializeComposition(root, 'static-and-balanced-proxy', composeSites(multiRequest(version, [multiStaticSites[0], sharedUpstreamSites[0]]), 'static-and-balanced-proxy'), 'full-config'), source: 'forge-upstream-output'});
+
+  const missingUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy]));
+  assert.equal(missingUpstream.ok, false, 'Forge must reject unresolved upstream references');
+  const unsafeUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy, upstreamCapability('app-pool', 'round-robin', [{host: '127.0.0.1;include', port: 4101}, {host: '127.0.0.1', port: 4102}])]));
+  assert.equal(unsafeUpstream.ok, false, 'Forge must reject unsafe backend addresses');
+  const unsupportedStrategy = composeNginxCapabilities(compositionRequest(version, [balancedProxy, {...roundRobin, input: {...roundRobin.input, strategy: 'random'}}]));
+  assert.equal(unsupportedStrategy.ok, false, 'Forge must reject unsupported balancing strategies');
+  const contradictoryUpstreams = composeNginxSites(multiRequest(version, [
+    sharedUpstreamSites[0],
+    {id: 'balanced-conflict', capabilities: [upstreamProxy('balanced-conflict.example.com'), upstreamCapability('app-pool', 'round-robin', [{host: '127.0.0.1', port: 4301}, {host: '127.0.0.1', port: 4302}])]},
+  ]));
+  assert.equal(contradictoryUpstreams.ok, false, 'Forge must reject contradictory shared upstream definitions');
+
   const duplicate = composeNginxSites(multiRequest(version, [nativeSite('one', 'duplicate.example.com', 3501), nativeSite('two', 'duplicate.example.com', 3502)]));
   assert.equal(duplicate.ok, false, 'Forge must reject duplicate listener/server-name ownership');
   assert.ok(duplicate.diagnostics.some(item => item.code === 'composition.server.conflict'));
@@ -210,6 +259,10 @@ async function materializePositive(root, version) {
     unsafeStaticIndexRejected: true,
     staticProxyRootConflictRejected: true,
     staticWebSocketConflictRejected: true,
+    missingUpstreamRejected: true,
+    unsafeUpstreamRejected: true,
+    unsupportedUpstreamStrategyRejected: true,
+    contradictorySharedUpstreamRejected: true,
   }};
 }
 
@@ -266,6 +319,21 @@ async function materializeNegative(root, generated) {
       name: 'duplicate-static-root', source: 'static-website',
       mutate: content => content.replace('root /fixtures/shared/static-standard;', 'root /fixtures/shared/static-standard;\n        root /fixtures/shared/static-spa;'),
       expected: ['"root" directive is duplicate'],
+    },
+    {
+      name: 'invalid-upstream-parameter', source: 'upstream-weighted-round-robin',
+      mutate: content => content.replace('weight=3', 'weight=0'),
+      expected: ['invalid parameter "weight=0"'],
+    },
+    {
+      name: 'invalid-least-conn-context', source: 'upstream-least-connections',
+      mutate: content => content.replace('least_conn;', '').replace('location / {', 'location / {\n            least_conn;'),
+      expected: ['"least_conn" directive is not allowed here'],
+    },
+    {
+      name: 'duplicate-upstream-name', source: 'upstream-weighted-round-robin',
+      mutate: content => content.replace('    server {', '    upstream forge_app_pool { server 127.0.0.1:4999; }\n\n    server {'),
+      expected: ['duplicate upstream "forge_app_pool"'],
     },
   ];
   const fixtures = [];

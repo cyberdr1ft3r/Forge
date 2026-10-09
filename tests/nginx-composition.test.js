@@ -38,6 +38,24 @@ const staticSite = (domain = 'static.example.com', overrides = {}) => ({
   input: {domain, documentRoot: '/var/www/static-site', indexFile: 'index.html', spaFallback: false, ...overrides},
 });
 
+const upstreamProxy = (domain = 'balanced.example.com', upstreamId = 'app-pool') => ({
+  id: 'reverse-proxy',
+  input: {domain, upstreamId},
+});
+
+const upstream = (upstreamId = 'app-pool', overrides = {}) => ({
+  id: 'upstream-load-balancing',
+  input: {
+    upstreamId,
+    strategy: 'round-robin',
+    backends: [
+      {host: '10.0.0.10', port: 8080, weight: 3, maxFails: 2, failTimeoutSeconds: 15},
+      {host: '10.0.0.11', port: 8080, backup: true},
+    ],
+    ...overrides,
+  },
+});
+
 const routing = {
   id: 'routing',
   input: {routes: [
@@ -58,7 +76,7 @@ test('multi-site API is additive and keeps legacy single-site artifacts byte-ide
 
   const multi = composeSites([siteProxy('app', 'app.example.com')]);
   assert.equal(multi.ok, true);
-  assert.equal(multi.provenance.version, '2.1.0');
+  assert.equal(multi.provenance.version, '2.2.0');
   assert.deepEqual(multi.provenance.sites, ['app']);
   assert.equal(multi.artifacts[0].content, before.artifacts[0].content);
 });
@@ -155,13 +173,140 @@ test('multi-site expansion remains bounded', () => {
   assert.ok(result.diagnostics.some(item => item.code === 'composition.sites.count'));
 });
 
-test('capability registry is typed, versioned, immutable, and adds only the Phase 4A static shelf', () => {
+test('capability registry is typed, versioned, immutable, and includes the Phase 4 shelves', () => {
   const definitions = listCapabilityDefinitions();
-  assert.deepEqual(definitions.map(item => item.id).sort(), ['reverse-proxy', 'routing', 'static-site', 'tls', 'websocket']);
+  assert.deepEqual(definitions.map(item => item.id).sort(), ['reverse-proxy', 'routing', 'static-site', 'tls', 'upstream-load-balancing', 'websocket']);
   assert.ok(definitions.every(item => /^\d+\.\d+\.\d+$/.test(item.version)));
   assert.ok(definitions.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(definitions.every(item => item.astSurface.contexts.length > 0));
   assert.throws(() => { definitions[0].dependencies.push('tls'); }, TypeError);
+});
+
+test('upstream load balancing emits a trusted HTTP-level block and preserves proxy URI behavior', () => {
+  const result = compose([upstreamProxy(), upstream()]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /upstream forge_app_pool \{/);
+  assert.match(content, /server 10\.0\.0\.10:8080 weight=3 max_fails=2 fail_timeout=15s;/);
+  assert.match(content, /server 10\.0\.0\.11:8080 max_fails=1 fail_timeout=10s backup;/);
+  assert.match(content, /proxy_pass http:\/\/forge_app_pool;/);
+  assert.doesNotMatch(content, /least_conn;/);
+  assert.ok(content.indexOf('upstream forge_app_pool') < content.indexOf('server_name balanced.example.com'));
+  assert.ok(result.explanations.some(item => item.code === 'composition.upstream.passive-failures' && /no active health checks/.test(item.message)));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.upstream.reachability'));
+});
+
+test('least-connections, weights, IPv6, backup, down, TLS, and WebSockets compose deterministically', () => {
+  const balanced = upstream('edge-pool', {strategy: 'least-connections', backends: [
+    {host: '[2001:db8::2]', port: 8080, weight: 4, maxFails: 0, failTimeoutSeconds: 30},
+    {host: 'backend.internal', port: 8081, down: true},
+    {host: '10.0.0.12', port: 8082, backup: true},
+  ]});
+  const selections = [upstreamProxy('secure.example.com', 'edge-pool'), balanced, tls, websocket];
+  const first = compose(selections);
+  const second = compose([...selections].reverse());
+  assert.equal(first.ok, true);
+  assert.deepEqual(second.artifacts, first.artifacts);
+  const content = first.artifacts[0].content;
+  assert.match(content, /least_conn;/);
+  assert.match(content, /server \[2001:db8::2\]:8080 weight=4 max_fails=0 fail_timeout=30s;/);
+  assert.match(content, /server backend\.internal:8081 max_fails=1 fail_timeout=10s down;/);
+  assert.match(content, /listen 443 ssl;/);
+  assert.match(content, /proxy_set_header Upgrade \$http_upgrade;/);
+
+  const reorderedBackends = compose([upstreamProxy('secure.example.com', 'edge-pool'), upstream('edge-pool', {...balanced.input, backends: [...balanced.input.backends].reverse()}), tls, websocket]);
+  assert.equal(reorderedBackends.ok, true);
+  assert.deepEqual(reorderedBackends.artifacts, first.artifacts);
+});
+
+test('reverse proxy preserves direct targets and rejects missing or unused upstream declarations', () => {
+  const direct = compose([reverseProxy]);
+  assert.equal(direct.ok, true);
+  assert.match(direct.artifacts[0].content, /proxy_pass http:\/\/127\.0\.0\.1:3000;/);
+
+  const missing = compose([upstreamProxy()]);
+  assert.equal(missing.ok, false);
+  assert.ok(missing.diagnostics.some(item => item.code === 'composition.upstream.reference-missing'));
+
+  const unused = compose([reverseProxy, upstream()]);
+  assert.equal(unused.ok, false);
+  assert.ok(unused.diagnostics.some(item => item.code === 'composition.upstream.unused'));
+
+  const ambiguous = compose([{id: 'reverse-proxy', input: {...reverseProxy.input, upstreamId: 'app-pool'}}]);
+  assert.equal(ambiguous.ok, false);
+  assert.ok(ambiguous.diagnostics.some(item => item.code === 'composition.proxy.target-choice'));
+
+  const duplicate = compose([upstreamProxy(), upstream(), upstream()]);
+  assert.equal(duplicate.ok, false);
+  assert.ok(duplicate.diagnostics.some(item => item.code === 'composition.capability.duplicate'));
+});
+
+test('upstream input rejects unsafe, unsupported, duplicate, and ineffective backend definitions', () => {
+  const invalidSelections = [
+    upstream('app-pool', {strategy: 'random'}),
+    upstream('app-pool;include', {}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080}, {host: '10.0.0.10', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10; return', port: 8080}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 0}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, weight: 101}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, maxFails: -1}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, failTimeoutSeconds: 301}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, backup: true, down: true}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, down: true}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, backup: true}, {host: '10.0.0.11', port: 8080, backup: true}]}),
+    upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, raw: 'slow_start=5s'}, {host: '10.0.0.11', port: 8080}]}),
+    upstream('backend', {backends: [{host: 'backend', port: 8080}, {host: '10.0.0.11', port: 8080}]}),
+  ];
+  for (const selection of invalidSelections) {
+    const result = compose([upstreamProxy(), selection]);
+    assert.equal(result.ok, false, JSON.stringify(selection.input));
+    assert.deepEqual(result.artifacts, []);
+  }
+  for (const value of ['true', 1, null, {}]) {
+    const selection = upstream('app-pool', {backends: [{host: '10.0.0.10', port: 8080, backup: value}, {host: '10.0.0.11', port: 8080}]});
+    const result = compose([upstreamProxy(), selection]);
+    assert.equal(result.ok, false);
+    assert.ok(result.diagnostics.some(item => item.code === 'composition.input.boolean'));
+  }
+});
+
+test('multi-site upstream resources deduplicate equivalent definitions and reject contradictions', () => {
+  const sharedSites = ['alpha', 'bravo'].map(id => ({id, capabilities: [upstreamProxy(`${id}.example.com`), upstream()]}));
+  const shared = composeSites(sharedSites);
+  assert.equal(shared.ok, true);
+  assert.equal((shared.artifacts[0].content.match(/upstream forge_app_pool/g) ?? []).length, 1);
+  assert.equal((shared.artifacts[0].content.match(/proxy_pass http:\/\/forge_app_pool;/g) ?? []).length, 2);
+  assert.ok(shared.explanations.some(item => item.code === 'composition.shared.dependencies' && item.siteIds?.join(',') === 'alpha,bravo'));
+
+  const distinct = composeSites([
+    {id: 'alpha', capabilities: [upstreamProxy('alpha.example.com', 'alpha-pool'), upstream('alpha-pool')]},
+    {id: 'bravo', capabilities: [upstreamProxy('bravo.example.com', 'bravo-pool'), upstream('bravo-pool')]},
+  ]);
+  assert.equal(distinct.ok, true);
+  assert.equal((distinct.artifacts[0].content.match(/upstream forge_/g) ?? []).length, 2);
+
+  const contradictory = composeSites([
+    {id: 'alpha', capabilities: [upstreamProxy('alpha.example.com'), upstream()]},
+    {id: 'bravo', capabilities: [upstreamProxy('bravo.example.com'), upstream('app-pool', {backends: [{host: '10.0.0.20', port: 8080}, {host: '10.0.0.21', port: 8080}]})]},
+  ]);
+  assert.equal(contradictory.ok, false);
+  assert.ok(contradictory.diagnostics.some(item => item.code === 'composition.shared.conflict'));
+});
+
+test('upstream fragments separate HTTP resources and mixed static/proxy sites remain valid', () => {
+  const fragment = compose([upstreamProxy(), upstream()], 'site-fragment');
+  assert.equal(fragment.ok, true);
+  assert.deepEqual(fragment.artifacts.map(item => item.filename), ['site.conf', 'http-shared.conf']);
+  assert.match(fragment.artifacts[0].content, /proxy_pass http:\/\/forge_app_pool;/);
+  assert.match(fragment.artifacts[1].content, /^upstream forge_app_pool/);
+
+  const mixed = composeSites([
+    {id: 'balanced', capabilities: [upstreamProxy(), upstream()]},
+    {id: 'static', capabilities: [staticSite('static.example.com')]},
+  ]);
+  assert.equal(mixed.ok, true);
+  assert.match(mixed.artifacts[0].content, /upstream forge_app_pool/);
+  assert.match(mixed.artifacts[0].content, /root \/var\/www\/static-site;/);
 });
 
 test('static website emits typed root, index, MIME resources, and an explicit 404 fallback', () => {

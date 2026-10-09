@@ -54,9 +54,10 @@ const directives = deepFreeze({
   ssl_certificate_key: {id: 'ssl_certificate_key', nginxName: 'ssl_certificate_key', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 340},
   ssl_protocols: {id: 'ssl_protocols', nginxName: 'ssl_protocols', contexts: ['http', 'server'], arguments: [{kinds: ['keyword'], keywords: ['TLSv1.2', 'TLSv1.3'], variadic: true}], repeatability: 'single', order: 350},
   proxy_http_version: {id: 'proxy_http_version', nginxName: 'proxy_http_version', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['keyword'], keywords: ['1.1']}], repeatability: 'single', order: 390},
-  proxy_pass: {id: 'proxy_pass', nginxName: 'proxy_pass', contexts: ['location'], arguments: [{kinds: ['proxy-url']}], repeatability: 'single', order: 400},
+  proxy_pass: {id: 'proxy_pass', nginxName: 'proxy_pass', contexts: ['location'], arguments: [{kinds: ['proxy-url', 'upstream-url']}], repeatability: 'single', order: 400},
   proxy_set_header: {id: 'proxy_set_header', nginxName: 'proxy_set_header', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['header-name']}, {kinds: ['literal', 'variable', 'quoted']}], repeatability: 'keyed', order: 410},
-  upstream_server: {id: 'upstream_server', nginxName: 'server', contexts: ['upstream'], arguments: [{kinds: ['upstream-address']}], repeatability: 'keyed', order: 500},
+  least_conn: {id: 'least_conn', nginxName: 'least_conn', contexts: ['upstream'], arguments: [], repeatability: 'single', order: 490},
+  upstream_server: {id: 'upstream_server', nginxName: 'server', contexts: ['upstream'], arguments: [{kinds: ['upstream-address']}, {kinds: ['upstream-parameter'], optional: true, variadic: true}], repeatability: 'keyed', order: 500},
   keepalive: {id: 'keepalive', nginxName: 'keepalive', contexts: ['upstream'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}], repeatability: 'single', order: 510},
 } as const satisfies Record<KnownDirectiveName, DirectiveDefinition>);
 

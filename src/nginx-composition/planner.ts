@@ -19,7 +19,7 @@ import type {
   TlsContribution,
 } from './types.js';
 
-const ENGINE_VERSION = '2.0.0' as const;
+const ENGINE_VERSION = '2.2.0' as const;
 const knownModules = new Set<NginxModule>(['http_map', 'http_proxy', 'http_rewrite', 'http_ssl']);
 
 const diagnostic = (code: string, message: string, path: string, stage: 'input' | 'static' | 'generation' = 'input'): Diagnostic => ({code, message, path, severity: 'error', stage});
@@ -133,10 +133,12 @@ function versionAtLeast(actual: readonly [number, number, number], minimum: stri
 }
 
 function routeBlock(route: PlannedRoute, websocket: boolean, siteId?: string): BlockNode<'location'> {
-  const proxyUrl = `http://${route.targetHost}:${route.targetPort}${route.forwarding === 'strip-prefix' ? '/' : ''}`;
+  const proxyUrl = route.target.kind === 'direct'
+    ? `http://${route.target.host}:${route.target.port}${route.forwarding === 'strip-prefix' ? '/' : ''}`
+    : `http://${route.target.nginxName}${route.forwarding === 'strip-prefix' ? '/' : ''}`;
   const children: NginxNode[] = [
     directive('proxy_http_version', [arg.keyword('1.1')], route.source),
-    directive('proxy_pass', [arg.proxyUrl(proxyUrl)], route.source),
+    directive('proxy_pass', [route.target.kind === 'direct' ? arg.proxyUrl(proxyUrl) : arg.upstreamUrl(proxyUrl)], route.source),
     directive('proxy_set_header', [arg.headerName('Host'), arg.variable('$host')], route.source),
     directive('proxy_set_header', [arg.headerName('X-Forwarded-For'), arg.variable('$proxy_add_x_forwarded_for')], route.source),
     directive('proxy_set_header', [arg.headerName('X-Forwarded-Proto'), arg.variable('$scheme')], route.source),
@@ -195,6 +197,7 @@ export function applicationServers(
 
 function semanticHttpIdentity(node: NginxNode): string {
   if (node.kind === 'block' && node.blockType === 'map') return `map:${String(node.header[1]?.value)}`;
+  if (node.kind === 'block' && node.blockType === 'upstream') return `upstream:${String(node.header[0]?.value)}`;
   return `${node.kind}:${node.kind === 'directive' ? node.name : node.kind === 'block' ? node.blockType : String(node.key.value)}`;
 }
 
@@ -299,6 +302,17 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
     const first = routeKeys.get(prefix);
     if (first !== undefined) return failure([diagnostic('composition.route.duplicate', `Duplicate literal route ${prefix}; first contributed at planned route ${first}.`, `planned.routes[${index}]`, 'static')], capabilities, explanations, prerequisites, true);
     routeKeys.set(prefix, index);
+  }
+
+  const declaredUpstreams = new Set(contributions.flatMap(item => item.sharedHttpNodes ?? [])
+    .filter((node): node is BlockNode<'upstream'> => node.kind === 'block' && node.blockType === 'upstream')
+    .map(node => String(node.header[0]?.value)));
+  const referencedUpstreams = new Set(routes.flatMap(route => route.target.kind === 'upstream' ? [route.target.nginxName] : []));
+  for (const name of referencedUpstreams) {
+    if (!declaredUpstreams.has(name)) return failure([diagnostic('composition.upstream.reference-missing', `Proxy target references undeclared upstream ${name}.`, 'planned.routes', 'static')], capabilities, explanations, prerequisites, true);
+  }
+  for (const name of declaredUpstreams) {
+    if (!referencedUpstreams.has(name)) return failure([diagnostic('composition.upstream.unused', `Declared upstream ${name} is not referenced by the site reverse proxy.`, 'planned.sharedHttp', 'static')], capabilities, explanations, prerequisites, true);
   }
 
   const websocketPrefixes = contributions.flatMap(item => item.websocketRoutes ?? []);
