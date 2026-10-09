@@ -59,7 +59,7 @@ function dockerSecurityArguments() {
     '--rm', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--user', `${uid}:${gid}`,
     '--read-only', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5',
-    '--tmpfs', '/tmp:rw,noexec,nosuid,size=16m',
+    '--tmpfs', '/tmp:rw,noexec,nosuid,mode=1777,size=16m',
     '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,size=16m',
     '--tmpfs', '/var/run:rw,noexec,nosuid,size=4m',
   ];
@@ -218,7 +218,7 @@ async function runNginx(image, root, fixture) {
   const containerName = `forge-nginx-native-${process.pid}-${containerSequence++}`;
   const relative = fixture.directory.slice(root.length + 1).replaceAll('\\', '/');
   const args = ['run', ...dockerSecurityArguments(), '--name', containerName, '--volume', `${root}:/fixtures:ro`, '--entrypoint', 'nginx', image,
-    '-t', '-e', 'stderr', '-p', `/fixtures/${relative}/`, '-c', `/fixtures/${relative}/nginx.conf`];
+    '-t', '-e', 'stderr', '-g', 'pid /tmp/nginx.pid;', '-p', `/fixtures/${relative}/`, '-c', `/fixtures/${relative}/nginx.conf`];
   const result = await runProcess('docker', args);
   if (result.timedOut) await runProcess('docker', ['rm', '--force', containerName], {timeoutMs: 10_000});
   return result;
