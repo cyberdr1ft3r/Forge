@@ -32,23 +32,11 @@ jobs:
           node --check tests/generators.test.js
           node --check tests/nginx-syntax.test.js
           node --check tests/nginx-composition.test.js
+          node --check tests/nginx-native-harness.mjs
       - name: Unit tests
         run: npm test
-      - name: Native Nginx parser fixtures
-        run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl
-          export FORGE_NGINX_FIXTURES=/tmp/forge-nginx-fixtures
-          mkdir -p "$FORGE_NGINX_FIXTURES"
-          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-            -keyout "$FORGE_NGINX_FIXTURES/key.pem" \
-            -out "$FORGE_NGINX_FIXTURES/cert.pem" \
-            -subj '/CN=app.example.com' >/dev/null 2>&1
-          node tests/nginx-native-fixtures.mjs
-          for scenario in http tls websocket bundle; do
-            echo "Checking native Nginx parser: $scenario"
-            sudo nginx -t -p "$FORGE_NGINX_FIXTURES/$scenario/" -c "$FORGE_NGINX_FIXTURES/$scenario/nginx.conf"
-          done
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
       - name: HTTP smoke test
         run: |
           npm run dev > /tmp/forge-server.log 2>&1 &
@@ -60,3 +48,37 @@ jobs:
           done
           grep -q 'Forge — Configuration Studio' /tmp/forge-home.html || { cat /tmp/forge-server.log; exit 1; }
           curl --fail --silent http://127.0.0.1:4173/dist/generators/index.js -o /dev/null || { cat /tmp/forge-server.log; exit 1; }
+
+  nginx-native:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: nginx-1.24.0
+            image: nginx:1.24.0@sha256:f6daac2445b0ce70e64d77442ccf62839f3f1b4c24bf6746a857eff014e798c8
+          - name: nginx-1.26.3
+            image: nginx:1.26.3@sha256:41b194461e4bae16f9b25d68b0976ed4735b89ca625c89aad88e1c1c3b7e8860
+    name: Native Nginx (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build composition engine
+        run: npm run build
+      - name: Verify native fixtures
+        run: node tests/nginx-native-harness.mjs --image "${{ matrix.image }}" --report native-validation-report.json
+      - name: Upload native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-native-evidence
+          path: native-validation-report.json
+          if-no-files-found: error
+          retention-days: 14

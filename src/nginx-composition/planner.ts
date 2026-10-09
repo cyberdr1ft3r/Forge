@@ -27,6 +27,16 @@ const nativeUnavailable: ValidationRecord = {
   validator: 'nginx -t',
   diagnostics: [{code: 'native.unavailable', severity: 'warning', stage: 'native', message: 'Forge structural validation passed; an Nginx parser did not run.'}],
 };
+const targetHostNotRun: ValidationRecord = {
+  status: 'not-run',
+  validator: 'target-host nginx readiness',
+  diagnostics: [{
+    code: 'target-host.not-run',
+    severity: 'warning',
+    stage: 'target-host',
+    message: 'The target host, installed modules, certificates, filesystem, permissions, and external services were not inspected.',
+  }],
+};
 const notRun: ValidationRecord = {status: 'not-run', diagnostics: []};
 
 export interface DependencyResolution {
@@ -94,6 +104,7 @@ function failure(
     input: inputPassed ? {status: 'passed', diagnostics: []} : {status: 'failed', diagnostics: inputDiagnostics},
     static: staticDiagnostics.length > 0 ? {status: 'failed', diagnostics: staticDiagnostics} : notRun,
     native: nativeUnavailable,
+    targetHost: targetHostNotRun,
   };
   return {ok: false, artifacts: [], diagnostics: [...diagnostics, ...nativeUnavailable.diagnostics], explanations, prerequisites, validation, provenance: provenance(capabilities)};
 }
@@ -324,6 +335,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
     input: {status: 'passed', diagnostics: []},
     static: {status: 'passed', diagnostics: staticDiagnostics},
     native: nativeUnavailable,
+    targetHost: targetHostNotRun,
   };
   return {
     ok: true,

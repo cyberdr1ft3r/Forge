@@ -62,6 +62,9 @@ test('HTTP reverse proxy composes a validated deterministic full configuration',
   assert.ok(result.explanations.some(item => item.code === 'composition.proxy.route'));
   assert.equal(result.validation.static.status, 'passed');
   assert.equal(result.validation.native.status, 'unavailable');
+  assert.equal(result.validation.targetHost.status, 'not-run');
+  assert.equal(result.validation.targetHost.validator, 'target-host nginx readiness');
+  assert.ok(result.validation.targetHost.diagnostics.some(item => item.code === 'target-host.not-run'));
 });
 
 test('TLS adds an HTTPS listener only with explicit certificate and key paths', () => {
@@ -170,6 +173,7 @@ test('unsupported profiles, versions, and required modules fail actionably', () 
   const profile = composeNginxCapabilities({profile: 'http-fragment', target, capabilities: [reverseProxy]});
   assert.equal(profile.ok, false);
   assert.ok(profile.diagnostics.some(item => item.code === 'composition.profile.unsupported'));
+  assert.equal(profile.validation.targetHost.status, 'not-run');
 
   const version = compose([reverseProxy], 'full-config', {...target, version: '1.17.9'});
   assert.equal(version.ok, false);
