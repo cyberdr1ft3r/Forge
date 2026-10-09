@@ -28,8 +28,10 @@ jobs:
           node --check dist/app.js
           node --check dist/generators/index.js
           node --check dist/nginx-syntax/index.js
+          node --check dist/nginx-composition/index.js
           node --check tests/generators.test.js
           node --check tests/nginx-syntax.test.js
+          node --check tests/nginx-composition.test.js
       - name: Unit tests
         run: npm test
       - name: HTTP smoke test
