@@ -49,6 +49,8 @@ Issue #14 Phase 1 adds an Nginx-specific typed syntax engine under `src/nginx-sy
 
 Issue #14 Phase 2 adds the backend capability planner under `src/nginx-composition/`. Four immutable, versioned definitions—reverse proxy, routing, TLS/redirect, and WebSocket—validate untrusted capability input, resolve dependencies and target requirements, merge semantic contributions, then materialize the Phase 1 AST. Full configurations contain shared HTTP resources directly; site fragments emit a separate supporting HTTP-context artifact when required. The legacy generator and browser UI remain unchanged. See [`NGINX_CAPABILITY_COMPOSITION_PHASE2.md`](NGINX_CAPABILITY_COMPOSITION_PHASE2.md) for the contract, security controls, and limitations.
 
+Issue #14 Phase 3 adds a CI-only native validation harness and official-image compatibility matrix. It validates actual composition artifacts with `nginx -t`, records version/module evidence, and proves representative invalid mutations are rejected. It does not execute in the browser or establish target-host readiness. See [`NGINX_NATIVE_VALIDATION_PHASE3.md`](NGINX_NATIVE_VALIDATION_PHASE3.md).
+
 ## Manifest and versioning
 
 Every manifest declares:
@@ -66,15 +68,16 @@ The registry rejects duplicate IDs and unsupported contract versions. Registrati
 
 ## Validation model
 
-Each result records three distinct tiers:
+Each result records three required tiers. APIs that need to distinguish deployment-host readiness may add the optional fourth tier without breaking the 1.x contract:
 
 | Tier | Meaning | Possible current state |
 | --- | --- | --- |
 | Input | Runtime validation and normalization eligibility | `passed` or `failed` |
 | Static | Forge checks over generated artifact structure | `passed`, `failed`, or `not-run` |
 | Native | The technology's real parser/validator | `unavailable` |
+| Target host (optional) | The eventual host, modules, files, permissions, and prerequisites | `not-run`, `unavailable`, `passed`, or `failed` |
 
-`tryGenerate` returns a structured success/failure outcome. The legacy functions throw on failure to preserve existing callers. A failed input never reaches normalization or generation. A static failure withholds artifacts from the public outcome. Native validation is always `unavailable` in this browser application; instructions such as `nginx -t`, `docker compose config -q`, and `systemd-analyze verify` are operator guidance, not evidence that the commands ran. A `passed` static state means only that Forge's deterministic artifact invariants and generator-specific structural heuristics found no error. It is not schema validation by, or a substitute for, the technology's parser.
+`tryGenerate` returns a structured success/failure outcome. The legacy functions throw on failure to preserve existing callers. A failed input never reaches normalization or generation. A static failure withholds artifacts from the public outcome. Native validation is always `unavailable` in this browser application; instructions such as `nginx -t`, `docker compose config -q`, and `systemd-analyze verify` are operator guidance, not evidence that the commands ran. Phase 3 CI parser evidence applies to committed fixtures, not an individual browser result. A `passed` static state means only that Forge's deterministic artifact invariants and generator-specific structural heuristics found no error. It is not schema validation by, or a substitute for, the technology's parser.
 
 ## Security boundaries
 

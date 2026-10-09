@@ -3,7 +3,7 @@ export const GENERATOR_CONTRACT_VERSION = '1.0' as const;
 export type GeneratorContractVersion = typeof GENERATOR_CONTRACT_VERSION;
 export type ValidationStatus = 'passed' | 'failed' | 'not-run' | 'unavailable';
 export type DiagnosticSeverity = 'info' | 'warning' | 'error';
-export type DiagnosticStage = 'input' | 'static' | 'native' | 'generation' | 'export';
+export type DiagnosticStage = 'input' | 'static' | 'native' | 'target-host' | 'generation' | 'export';
 
 export interface Diagnostic {
   readonly code: string;
@@ -23,6 +23,8 @@ export interface ValidationSummary {
   readonly input: ValidationRecord;
   readonly static: ValidationRecord;
   readonly native: ValidationRecord;
+  /** Optional additive tier for consumers that distinguish CI/parser evidence from the eventual deployment host. */
+  readonly targetHost?: ValidationRecord;
 }
 
 export type SchemaFieldType = 'string' | 'integer' | 'boolean' | 'enum';
