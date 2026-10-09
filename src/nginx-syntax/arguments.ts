@@ -26,6 +26,15 @@ function validPath(value: string): boolean {
     && !value.split('/').includes('..');
 }
 
+function validFilePath(value: string): boolean {
+  return value.length <= 512
+    && value !== '/'
+    && !value.endsWith('/')
+    && /^\/[A-Za-z0-9_./-]*$/.test(value)
+    && !value.includes('//')
+    && !value.split('/').some(segment => segment === '.' || segment === '..');
+}
+
 function validHost(host: string): boolean {
   if (host.startsWith('[')) {
     if (!host.endsWith(']') || !/^[0-9A-Fa-f:.]+$/.test(host.slice(1, -1))) return false;
@@ -35,8 +44,12 @@ function validHost(host: string): boolean {
       return false;
     }
   }
-  return host === 'localhost'
-    || (host.length <= 253 && host.split('.').every(label => domainLabel.test(label.toLowerCase())));
+  if (host === 'localhost') return true;
+  const labels = host.split('.');
+  if (labels.every(label => /^\d+$/.test(label))) {
+    return labels.length === 4 && labels.every(label => Number(label) <= 255);
+  }
+  return host.length <= 253 && labels.every(label => domainLabel.test(label.toLowerCase()));
 }
 
 function validPort(port: string | undefined): boolean {
@@ -81,7 +94,7 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
 
   if (typeof candidate.value !== 'string') return 'Argument value must be a string.';
   const value = candidate.value;
-  if (value.length === 0) return 'Argument value must not be empty.';
+  if (value.length === 0 && candidate.kind !== 'quoted') return 'Argument value must not be empty.';
 
   switch (candidate.kind) {
     case 'variable':
@@ -94,6 +107,8 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return validDomain(value) ? undefined : 'Domain must be a fully qualified DNS name.';
     case 'path':
       return validPath(value) ? undefined : 'Path must be absolute, bounded, traversal-free, and contain only safe path or glob characters.';
+    case 'file-path':
+      return validFilePath(value) ? undefined : 'File path must be absolute, bounded, traversal-free, and contain no whitespace, globs, or empty segments.';
     case 'proxy-url':
       return validProxyUrl(value) ? undefined : 'Proxy URL must be a literal http:// or https:// URL with a valid host, optional port, and safe path.';
     case 'upstream-address':

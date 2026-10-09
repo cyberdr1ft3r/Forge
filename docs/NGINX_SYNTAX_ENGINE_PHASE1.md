@@ -2,6 +2,8 @@
 
 This phase implements the typed syntax foundation described in issue #14 and the design-only draft PR #15. It deliberately does not implement capability shelves, dependency planning, TLS, WebSockets, load balancing, UI changes, native validation, deployment, or migration of the existing Nginx generator.
 
+Phase 2 now builds capability composition on this unchanged foundation; see [`NGINX_CAPABILITY_COMPOSITION_PHASE2.md`](NGINX_CAPABILITY_COMPOSITION_PHASE2.md). The Phase 1 profile, validation, and native-verification boundaries remain authoritative.
+
 ## Integration points
 
 - `src/nginx-syntax/types.ts` defines Nginx-specific AST nodes, typed arguments, source provenance, and the `full-config` / `site-fragment` profiles.

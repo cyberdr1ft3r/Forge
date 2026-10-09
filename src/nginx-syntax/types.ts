@@ -9,6 +9,7 @@ export type NginxArgumentKind =
   | 'integer'
   | 'domain'
   | 'path'
+  | 'file-path'
   | 'proxy-url'
   | 'upstream-address'
   | 'location-prefix'
@@ -47,10 +48,15 @@ export type KnownDirectiveName =
   | 'listen'
   | 'pid'
   | 'proxy_pass'
+  | 'proxy_http_version'
   | 'proxy_set_header'
+  | 'return'
   | 'root'
   | 'server_name'
   | 'server_tokens'
+  | 'ssl_certificate'
+  | 'ssl_certificate_key'
+  | 'ssl_protocols'
   | 'upstream_server'
   | 'user'
   | 'worker_connections'
@@ -106,6 +112,7 @@ export const nginxArgument = Object.freeze({
   integer: (value: number): NginxArgument => ({kind: 'integer', value}),
   domain: (value: string): NginxArgument => ({kind: 'domain', value}),
   path: (value: string): NginxArgument => ({kind: 'path', value}),
+  filePath: (value: string): NginxArgument => ({kind: 'file-path', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
   upstreamAddress: (value: string): NginxArgument => ({kind: 'upstream-address', value}),
   locationPrefix: (value: string): NginxArgument => ({kind: 'location-prefix', value}),
