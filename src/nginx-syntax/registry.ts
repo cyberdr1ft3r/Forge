@@ -15,6 +15,7 @@ export interface DirectiveDefinition {
   readonly contexts: readonly NginxContext[];
   readonly arguments: readonly ArgumentRule[];
   readonly repeatability: 'single' | 'repeatable' | 'keyed';
+  readonly identityArgument?: number;
   readonly order: number;
 }
 
@@ -50,11 +51,17 @@ const directives = deepFreeze({
   try_files: {id: 'try_files', nginxName: 'try_files', contexts: ['server', 'location'], arguments: [{kinds: ['try-file-candidate']}, {kinds: ['try-file-candidate']}, {kinds: ['try-file-fallback']}], repeatability: 'single', order: 380},
   listen: {id: 'listen', nginxName: 'listen', contexts: ['server'], arguments: [{kinds: ['integer'], minimum: 1, maximum: 65_535}, {kinds: ['keyword'], optional: true, keywords: ['default_server', 'ssl']}], repeatability: 'keyed', order: 300},
   log_format: {id: 'log_format', nginxName: 'log_format', contexts: ['http'], arguments: [{kinds: ['log-format-name']}, {kinds: ['keyword'], keywords: ['escape=json']}, {kinds: ['log-format-template']}], repeatability: 'keyed', order: 215},
+  limit_req_zone: {id: 'limit_req_zone', nginxName: 'limit_req_zone', contexts: ['http'], arguments: [{kinds: ['variable']}, {kinds: ['request-limit-zone-definition']}, {kinds: ['request-limit-rate']}], repeatability: 'keyed', identityArgument: 1, order: 240},
+  limit_conn_zone: {id: 'limit_conn_zone', nginxName: 'limit_conn_zone', contexts: ['http'], arguments: [{kinds: ['variable']}, {kinds: ['connection-limit-zone-definition']}], repeatability: 'keyed', identityArgument: 1, order: 250},
   server_name: {id: 'server_name', nginxName: 'server_name', contexts: ['server'], arguments: [{kinds: ['domain'], variadic: true}], repeatability: 'single', order: 310},
   return: {id: 'return', nginxName: 'return', contexts: ['server', 'location'], arguments: [{kinds: ['integer'], minimum: 100, maximum: 599}, {kinds: ['redirect-url']}], repeatability: 'single', order: 320},
   ssl_certificate: {id: 'ssl_certificate', nginxName: 'ssl_certificate', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 330},
   ssl_certificate_key: {id: 'ssl_certificate_key', nginxName: 'ssl_certificate_key', contexts: ['http', 'server'], arguments: [{kinds: ['file-path']}], repeatability: 'single', order: 340},
   ssl_protocols: {id: 'ssl_protocols', nginxName: 'ssl_protocols', contexts: ['http', 'server'], arguments: [{kinds: ['keyword'], keywords: ['TLSv1.2', 'TLSv1.3'], variadic: true}], repeatability: 'single', order: 350},
+  limit_req: {id: 'limit_req', nginxName: 'limit_req', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['request-limit-zone-reference']}, {kinds: ['request-limit-burst'], optional: true}, {kinds: ['keyword'], optional: true, keywords: ['nodelay']}], repeatability: 'single', order: 360},
+  limit_req_status: {id: 'limit_req_status', nginxName: 'limit_req_status', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['integer'], minimum: 400, maximum: 599}], repeatability: 'single', order: 361},
+  limit_conn: {id: 'limit_conn', nginxName: 'limit_conn', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['connection-limit-zone-name']}, {kinds: ['integer'], minimum: 1, maximum: 10_000}], repeatability: 'single', order: 362},
+  limit_conn_status: {id: 'limit_conn_status', nginxName: 'limit_conn_status', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['integer'], minimum: 400, maximum: 599}], repeatability: 'single', order: 363},
   proxy_http_version: {id: 'proxy_http_version', nginxName: 'proxy_http_version', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['keyword'], keywords: ['1.1']}], repeatability: 'single', order: 390},
   proxy_pass: {id: 'proxy_pass', nginxName: 'proxy_pass', contexts: ['location'], arguments: [{kinds: ['proxy-url', 'upstream-url']}], repeatability: 'single', order: 400},
   proxy_set_header: {id: 'proxy_set_header', nginxName: 'proxy_set_header', contexts: ['http', 'server', 'location'], arguments: [{kinds: ['header-name']}, {kinds: ['literal', 'variable', 'quoted']}], repeatability: 'keyed', order: 410},
