@@ -17,11 +17,12 @@ import type {
   NginxModule,
   PlannedRoute,
   StaticSiteContribution,
+  TrafficLimitingContribution,
   TlsContribution,
 } from './types.js';
 
-const ENGINE_VERSION = '2.3.0' as const;
-const knownModules = new Set<NginxModule>(['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl']);
+const ENGINE_VERSION = '2.4.0' as const;
+const knownModules = new Set<NginxModule>(['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl']);
 
 const diagnostic = (code: string, message: string, path: string, stage: 'input' | 'static' | 'generation' = 'input'): Diagnostic => ({code, message, path, severity: 'error', stage});
 const nativeUnavailable: ValidationRecord = {
@@ -165,6 +166,7 @@ export function applicationServers(
   siteId?: string,
   staticSite?: StaticSiteContribution,
   logging?: LoggingContribution,
+  trafficLimiting?: TrafficLimitingContribution,
 ): readonly BlockNode<'server'>[] {
   const reverseSource: NginxSourceProvenance = siteId === undefined
     ? {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION}
@@ -179,6 +181,7 @@ export function applicationServers(
       directive('listen', [arg.integer(80)], ownerSource),
       directive('server_name', [arg.domain(domain)], ownerSource),
       ...(logging?.directives ?? []),
+      ...(trafficLimiting?.directives ?? []),
       ...applicationNodes,
     ], ownerSource)];
   }
@@ -187,6 +190,7 @@ export function applicationServers(
     directive('listen', [arg.integer(443), arg.keyword('ssl')], tls.source),
     directive('server_name', [arg.domain(domain)], ownerSource),
     ...(logging?.directives ?? []),
+    ...(trafficLimiting?.directives ?? []),
     ...tls.directives,
     ...applicationNodes,
   ], tls.source);
@@ -204,6 +208,11 @@ function semanticHttpIdentity(node: NginxNode): string {
   if (node.kind === 'block' && node.blockType === 'map') return `map:${String(node.header[1]?.value)}`;
   if (node.kind === 'block' && node.blockType === 'upstream') return `upstream:${String(node.header[0]?.value)}`;
   if (node.kind === 'directive' && node.name === 'log_format') return `log-format:${String(node.args[0]?.value)}`;
+  if (node.kind === 'directive' && (node.name === 'limit_req_zone' || node.name === 'limit_conn_zone')) {
+    const definition = String(node.args[1]?.value);
+    const zoneName = /^zone=([^:]+):/.exec(definition)?.[1] ?? definition;
+    return `${node.name}:${zoneName}`;
+  }
   return `${node.kind}:${node.kind === 'directive' ? node.name : node.kind === 'block' ? node.blockType : String(node.key.value)}`;
 }
 
@@ -332,6 +341,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   const tls = contributions.map(item => item.tls).find(value => value !== undefined);
   const staticSite = contributions.map(item => item.staticSite).find(value => value !== undefined);
   const logging = contributions.map(item => item.logging).find(value => value !== undefined);
+  const trafficLimiting = contributions.map(item => item.trafficLimiting).find(value => value !== undefined);
   const sharedByIdentity = new Map<string, NginxNode>();
   let sharedConflict: Diagnostic | undefined;
   for (const node of contributions.flatMap(item => item.sharedHttpNodes ?? [])) {
@@ -342,7 +352,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   }
   if (sharedConflict !== undefined) return failure([sharedConflict], capabilities, explanations, prerequisites, true);
   const sharedHttpNodes = [...sharedByIdentity.entries()].sort(([left], [right]) => left.localeCompare(right, 'en')).map(([, node]) => node);
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls, undefined, staticSite, logging);
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls, undefined, staticSite, logging, trafficLimiting);
   const engineSource: NginxSourceProvenance = {kind: 'engine', id: 'nginx-capability-composition', version: ENGINE_VERSION};
 
   const document = candidate.profile === 'full-config'

@@ -1,7 +1,7 @@
 import type {Diagnostic} from '../core/types.js';
 import {argumentIdentity, validateArgument} from './arguments.js';
 import {getBlockDefinition, getDirectiveDefinition} from './registry.js';
-import type {ArgumentRule} from './registry.js';
+import type {ArgumentRule, DirectiveDefinition} from './registry.js';
 import type {BlockNode, DirectiveNode, NginxContext, NginxDocument, NginxNode, NginxSourceProvenance} from './types.js';
 
 const error = (code: string, message: string, path: string): Diagnostic => ({code, message, path, severity: 'error', stage: 'static'});
@@ -63,6 +63,16 @@ function blockIdentity(block: BlockNode): string {
   }
 }
 
+function directiveKeyIdentity(node: Partial<DirectiveNode>, definition: DirectiveDefinition): string {
+  const args = Array.isArray(node.args) ? node.args : [];
+  const argument = args[definition.identityArgument ?? 0];
+  if (definition.id === 'limit_req_zone' || definition.id === 'limit_conn_zone') {
+    const value = argument !== null && typeof argument === 'object' ? String((argument as {value?: unknown}).value) : '';
+    return /^zone=([^:]+):/.exec(value)?.[1] ?? argumentIdentity(argument);
+  }
+  return argumentIdentity(argument);
+}
+
 interface ServerDescriptor {
   readonly listeners: readonly {readonly identity: string; readonly mode: string; readonly defaultServer: boolean}[];
   readonly names: readonly string[];
@@ -94,8 +104,7 @@ function validateSiblingConflicts(children: readonly unknown[], parent: NginxCon
       const directiveNode = candidate as Partial<DirectiveNode>;
       const definition = getDirectiveDefinition(String(directiveNode.name));
       if (definition === undefined || definition.repeatability === 'repeatable') return;
-      const args = Array.isArray(directiveNode.args) ? directiveNode.args : [];
-      const key = definition.repeatability === 'single' ? definition.id : `${definition.id}:${argumentIdentity(args[0])}`;
+      const key = definition.repeatability === 'single' ? definition.id : `${definition.id}:${directiveKeyIdentity(directiveNode, definition)}`;
       const first = directiveKeys.get(key);
       if (first !== undefined) diagnostics.push(error('nginx.directive.duplicate', `Duplicate or conflicting ${definition.nginxName} declaration; first declared at ${path}[${first}].`, `${path}[${index}]`));
       else directiveKeys.set(key, index);
@@ -145,6 +154,12 @@ function validateNode(node: unknown, parent: NginxContext, path: string): readon
     if (definition === undefined) return [...diagnostics, error('nginx.directive.unsupported', `Unsupported directive: ${String((candidate as {name?: unknown}).name)}.`, `${path}.name`)];
     if (!definition.contexts.includes(parent)) diagnostics.push(error('nginx.directive.context', `${definition.nginxName} is not allowed in ${parent} context.`, path));
     diagnostics.push(...validateArguments((candidate as {args?: unknown}).args, definition.arguments, `${path}.args`));
+    if ((definition.id === 'limit_req_zone' || definition.id === 'limit_conn_zone') && Array.isArray((candidate as {args?: unknown}).args)) {
+      const key = ((candidate as {args: readonly unknown[]}).args[0] as {kind?: unknown; value?: unknown} | undefined);
+      if (key?.kind !== 'variable' || key.value !== '$binary_remote_addr') {
+        diagnostics.push(error('nginx.limit.key', 'Traffic-limiting zones must use the trusted $binary_remote_addr key.', `${path}.args[0]`));
+      }
+    }
     if (definition.id === 'access_log' && Array.isArray((candidate as {args?: unknown}).args)) {
       const args = (candidate as {args: readonly unknown[]}).args;
       const first = args[0] as {kind?: unknown; value?: unknown} | undefined;

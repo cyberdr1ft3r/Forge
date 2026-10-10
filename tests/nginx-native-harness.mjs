@@ -9,7 +9,7 @@ const PROCESS_TIMEOUT_MS = 30_000;
 const PULL_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const OFFICIAL_IMAGE = /^nginx:(\d+\.\d+\.\d+)(?:@sha256:[a-f0-9]{64})?$/;
-const REQUIRED_MODULES = ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
+const REQUIRED_MODULES = ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
 
 function parseArguments(argv) {
   const result = {image: undefined, report: undefined};
@@ -137,6 +137,15 @@ function loggingCapability(name, accessLog = 'combined', errorLogLevel = 'error'
   }};
 }
 
+function trafficCapability(policyId, overrides = {}) {
+  return {id: 'traffic-limiting', input: {
+    policyId,
+    requestLimit: {rate: 20, unit: 'second', burst: 10, nodelay: false, zoneSizeMb: 10, statusCode: 429},
+    connectionLimit: {connections: 25, zoneSizeMb: 10, statusCode: 429},
+    ...overrides,
+  }};
+}
+
 async function materializePositive(root, version) {
   const definitions = [
     ['http-reverse-proxy', [proxy], 'full-config'],
@@ -168,6 +177,14 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'logging-off', compose(compositionRequest(version, [proxy, loggingCapability('logging-off', 'off', 'crit')]), 'logging-off'), 'full-config'), source: 'forge-logging-output'});
   fixtures.push({...await materializeComposition(root, 'logging-json', compose(compositionRequest(version, [proxy, loggingJson]), 'logging-json'), 'full-config'), source: 'forge-logging-output'});
   fixtures.push({...await materializeComposition(root, 'logging-tls-websocket', compose(compositionRequest(version, [proxy, websocketRoot, tls(true), loggingCapability('logging-tls-websocket', 'forge-json')]), 'logging-tls-websocket'), 'full-config'), source: 'forge-logging-output'});
+
+  const requestOnly = trafficCapability('request-only', {connectionLimit: undefined, requestLimit: {rate: 5, unit: 'second', burst: 0, nodelay: false, zoneSizeMb: 4, statusCode: 429}});
+  const connectionOnly = trafficCapability('connection-only', {requestLimit: undefined, connectionLimit: {connections: 12, zoneSizeMb: 4, statusCode: 503}});
+  const bothCustom = trafficCapability('both-custom', {requestLimit: {rate: 30, unit: 'minute', burst: 15, nodelay: true, zoneSizeMb: 8, statusCode: 429}, connectionLimit: {connections: 8, zoneSizeMb: 6, statusCode: 429}});
+  fixtures.push({...await materializeComposition(root, 'traffic-request-only', compose(compositionRequest(version, [proxy, requestOnly]), 'traffic-request-only'), 'full-config'), source: 'forge-traffic-limiting-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-connection-only', compose(compositionRequest(version, [proxy, connectionOnly]), 'traffic-connection-only'), 'full-config'), source: 'forge-traffic-limiting-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-both-custom', compose(compositionRequest(version, [proxy, bothCustom]), 'traffic-both-custom'), 'full-config'), source: 'forge-traffic-limiting-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-tls-websocket', compose(compositionRequest(version, [proxy, websocketRoot, tls(true), trafficCapability('tls-websocket')]), 'traffic-tls-websocket'), 'full-config'), source: 'forge-traffic-limiting-output'});
 
   const httpSites = [nativeSite('alpha', 'alpha.example.com', 3101), nativeSite('bravo', 'bravo.example.com', 3102)];
   const multiHttp = composeSites(multiRequest(version, httpSites), 'multi-http-sites');
@@ -208,6 +225,7 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'static-and-proxy', composeSites(multiRequest(version, staticProxySites), 'static-and-proxy'), 'full-config'), source: 'forge-static-site-output'});
   fixtures.push({...await materializeComposition(root, 'static-and-tls', compose(compositionRequest(version, [staticStandard, tls(false)]), 'static-and-tls'), 'full-config'), source: 'forge-static-site-output'});
   fixtures.push({...await materializeComposition(root, 'logging-static', compose(compositionRequest(version, [staticStandard, loggingCapability('logging-static', 'combined', 'info')]), 'logging-static'), 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-static', compose(compositionRequest(version, [staticStandard, trafficCapability('static')]), 'traffic-static'), 'full-config'), source: 'forge-traffic-limiting-output'});
 
   const staticSocketSites = [multiStaticSites[0], nativeSite('socket-alongside-static', 'socket-alongside-static.example.com', 3602, [websocketRoot])];
   fixtures.push({...await materializeComposition(root, 'static-and-websocket-proxy', composeSites(multiRequest(version, staticSocketSites), 'static-and-websocket-proxy'), 'full-config'), source: 'forge-static-site-output'});
@@ -229,6 +247,7 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'upstream-least-connections', compose(compositionRequest(version, [upstreamProxy('least.example.com', 'least-pool'), leastConnections]), 'upstream-least-connections'), 'full-config'), source: 'forge-upstream-output'});
   fixtures.push({...await materializeComposition(root, 'upstream-tls-websocket', compose(compositionRequest(version, [balancedProxy, roundRobin, tls(false), websocketRoot]), 'upstream-tls-websocket'), 'full-config'), source: 'forge-upstream-output'});
   fixtures.push({...await materializeComposition(root, 'logging-upstream', compose(compositionRequest(version, [balancedProxy, roundRobin, loggingCapability('logging-upstream', 'forge-json', 'alert')]), 'logging-upstream'), 'full-config'), source: 'forge-logging-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-upstream-logging', compose(compositionRequest(version, [balancedProxy, roundRobin, loggingCapability('traffic-upstream-logging', 'forge-json'), trafficCapability('upstream')]), 'traffic-upstream-logging'), 'full-config'), source: 'forge-traffic-limiting-output'});
   fixtures.push({...await materializeComposition(root, 'upstream-site-fragment-bundle', compose(compositionRequest(version, [balancedProxy, roundRobin], 'site-fragment'), 'upstream-site-fragment-bundle'), 'site-fragment'), source: 'forge-upstream-output'});
 
   const sharedUpstreamSites = [
@@ -255,6 +274,24 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'multi-logging', multiLogging, 'full-config'), source: 'forge-logging-output'});
   fixtures.push({...await materializeComposition(root, 'logging-site-fragment-bundle', composeSites(multiRequest(version, loggedSites, 'site-fragment'), 'logging-site-fragment-bundle'), 'site-fragment'), source: 'forge-logging-output'});
 
+  const sharedTrafficSites = [
+    nativeSite('traffic-alpha', 'traffic-alpha.example.com', 4601, [trafficCapability('shared-edge')]),
+    nativeSite('traffic-bravo', 'traffic-bravo.example.com', 4602, [trafficCapability('shared-edge')]),
+  ];
+  const sharedTraffic = composeSites(multiRequest(version, sharedTrafficSites), 'multi-shared-traffic');
+  assert.equal((sharedTraffic.artifacts[0].content.match(/limit_req_zone .*forge_req_shared_edge/g) ?? []).length, 1, 'shared request zone must be emitted once');
+  fixtures.push({...await materializeComposition(root, 'multi-shared-traffic', sharedTraffic, 'full-config'), source: 'forge-traffic-limiting-output'});
+  const independentTrafficSites = [
+    nativeSite('traffic-one', 'traffic-one.example.com', 4611, [trafficCapability('policy-one')]),
+    nativeSite('traffic-two', 'traffic-two.example.com', 4612, [trafficCapability('policy-two')]),
+  ];
+  fixtures.push({...await materializeComposition(root, 'multi-independent-traffic', composeSites(multiRequest(version, independentTrafficSites), 'multi-independent-traffic'), 'full-config'), source: 'forge-traffic-limiting-output'});
+  fixtures.push({...await materializeComposition(root, 'traffic-site-fragment-bundle', composeSites(multiRequest(version, sharedTrafficSites, 'site-fragment'), 'traffic-site-fragment-bundle'), 'site-fragment'), source: 'forge-traffic-limiting-output'});
+  const trafficOrderA = composeSites(multiRequest(version, [...independentTrafficSites].reverse()), 'traffic-order-a');
+  const trafficOrderB = composeSites(multiRequest(version, independentTrafficSites), 'traffic-order-b');
+  assert.deepEqual(trafficOrderA.artifacts, trafficOrderB.artifacts, 'Equivalent traffic-limiting site orders must emit byte-identical artifacts');
+  fixtures.push({...await materializeComposition(root, 'traffic-site-order-determinism', trafficOrderA, 'full-config'), source: 'forge-traffic-limiting-output', equivalentSelectionOrderVerified: true});
+
   const missingUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy]));
   assert.equal(missingUpstream.ok, false, 'Forge must reject unresolved upstream references');
   const unsafeUpstream = composeNginxCapabilities(compositionRequest(version, [balancedProxy, upstreamCapability('app-pool', 'round-robin', [{host: '127.0.0.1;include', port: 4101}, {host: '127.0.0.1', port: 4102}])]));
@@ -272,6 +309,17 @@ async function materializePositive(root, version) {
   assert.equal(unsafeLogVariable.ok, false, 'Forge must reject variables in log paths');
   const unsupportedLogLevel = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'logging', input: {accessLog: 'off', errorLogPath: '/tmp/error.log', errorLogLevel: 'debug'}}]));
   assert.equal(unsupportedLogLevel.ok, false, 'Forge must reject unsupported debug logging');
+  const unsafeTrafficKey = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'traffic-limiting', input: {policyId: 'unsafe', requestLimit: {rate: 1, key: '$http_x_forwarded_for'}}}]));
+  assert.equal(unsafeTrafficKey.ok, false, 'Forge must reject arbitrary client identity expressions');
+  const unsafeTrafficId = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'traffic-limiting', input: {policyId: 'bad;include', requestLimit: {rate: 1}}}]));
+  assert.equal(unsafeTrafficId.ok, false, 'Forge must reject unsafe traffic policy identities');
+  const invalidTrafficBounds = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'traffic-limiting', input: {policyId: 'bounds', requestLimit: {rate: 0, zoneSizeMb: 64}}}]));
+  assert.equal(invalidTrafficBounds.ok, false, 'Forge must reject invalid rate and zone bounds');
+  const contradictoryTraffic = composeNginxSites(multiRequest(version, [
+    nativeSite('traffic-conflict-a', 'traffic-conflict-a.example.com', 4621, [trafficCapability('conflict', {connectionLimit: undefined, requestLimit: {rate: 10}})]),
+    nativeSite('traffic-conflict-b', 'traffic-conflict-b.example.com', 4622, [trafficCapability('conflict', {connectionLimit: undefined, requestLimit: {rate: 20}})]),
+  ]));
+  assert.equal(contradictoryTraffic.ok, false, 'Forge must reject contradictory shared traffic zones');
 
   const duplicate = composeNginxSites(multiRequest(version, [nativeSite('one', 'duplicate.example.com', 3501), nativeSite('two', 'duplicate.example.com', 3502)]));
   assert.equal(duplicate.ok, false, 'Forge must reject duplicate listener/server-name ownership');
@@ -300,6 +348,10 @@ async function materializePositive(root, version) {
     unsafeLogPathRejected: true,
     unsafeLogVariableRejected: true,
     unsupportedLogLevelRejected: true,
+    unsafeTrafficKeyRejected: true,
+    unsafeTrafficIdentityRejected: true,
+    invalidTrafficBoundsRejected: true,
+    contradictorySharedTrafficZoneRejected: true,
   }};
 }
 
@@ -397,6 +449,56 @@ async function materializeNegative(root, generated) {
       mutate: content => content.replace('    server {', '    log_format forge_json_v1 escape=json \'duplicate\';\n\n    server {'),
       expected: ['duplicate "log_format" name "forge_json_v1"'],
     },
+    {
+      name: 'missing-request-zone-definition', source: 'traffic-request-only',
+      mutate: content => content.replace('    limit_req_zone $binary_remote_addr zone=forge_req_request_only:4m rate=5r/s;\n', ''),
+      expected: ['zero size shared memory zone "forge_req_request_only"'],
+    },
+    {
+      name: 'missing-connection-zone-definition', source: 'traffic-connection-only',
+      mutate: content => content.replace('    limit_conn_zone $binary_remote_addr zone=forge_conn_connection_only:4m;\n', ''),
+      expected: ['zero size shared memory zone "forge_conn_connection_only"'],
+    },
+    {
+      name: 'invalid-request-zone-size', source: 'traffic-request-only',
+      mutate: content => content.replace('zone=forge_req_request_only:4m', 'zone=forge_req_request_only:0m'),
+      expected: ['invalid zone size "zone=forge_req_request_only:0m"'],
+    },
+    {
+      name: 'invalid-request-rate', source: 'traffic-request-only',
+      mutate: content => content.replace('rate=5r/s', 'rate=0r/s'),
+      expected: ['invalid rate "rate=0r/s"'],
+    },
+    {
+      name: 'invalid-request-burst', source: 'traffic-both-custom',
+      mutate: content => content.replace('burst=15', 'burst=0'),
+      expected: ['invalid burst value "burst=0"'],
+    },
+    {
+      name: 'invalid-request-limit-status', source: 'traffic-request-only',
+      mutate: content => content.replace('limit_req_status 429;', 'limit_req_status 399;'),
+      expected: ['value must be between 400 and 599'],
+    },
+    {
+      name: 'invalid-connection-limit-status', source: 'traffic-connection-only',
+      mutate: content => content.replace('limit_conn_status 503;', 'limit_conn_status 600;'),
+      expected: ['value must be between 400 and 599'],
+    },
+    {
+      name: 'invalid-connection-limit', source: 'traffic-connection-only',
+      mutate: content => content.replace('limit_conn forge_conn_connection_only 12;', 'limit_conn forge_conn_connection_only 0;'),
+      expected: ['invalid number of connections "0"'],
+    },
+    {
+      name: 'illegal-request-zone-context', source: 'traffic-request-only',
+      mutate: content => content.replace('events {', 'events {\n    limit_req_zone $binary_remote_addr zone=forge_req_illegal:1m rate=1r/s;'),
+      expected: ['"limit_req_zone" directive is not allowed here'],
+    },
+    {
+      name: 'duplicate-conflicting-request-zone', source: 'traffic-request-only',
+      mutate: content => content.replace('    limit_req_zone $binary_remote_addr zone=forge_req_request_only:4m rate=5r/s;', '    limit_req_zone $binary_remote_addr zone=forge_req_request_only:4m rate=5r/s;\n    limit_req_zone $binary_remote_addr zone=forge_req_request_only:8m rate=5r/s;'),
+      expected: ['conflicts with already declared size'],
+    },
   ];
   const fixtures = [];
   for (const mutation of mutations) {
@@ -438,6 +540,8 @@ function configureChecks(versionOutput, configureOutput, expectedVersion) {
     {id: 'http_map', verified: !hasFlag('--without-http_map_module'), evidence: 'no --without-http_map_module configure flag'},
     {id: 'http_rewrite', verified: !hasFlag('--without-http_rewrite_module'), evidence: 'no --without-http_rewrite_module configure flag'},
     {id: 'http_log', verified: !hasFlag('--without-http_log_module'), evidence: 'no --without-http_log_module configure flag'},
+    {id: 'http_limit_req', verified: !hasFlag('--without-http_limit_req_module'), evidence: 'no --without-http_limit_req_module configure flag'},
+    {id: 'http_limit_conn', verified: !hasFlag('--without-http_limit_conn_module'), evidence: 'no --without-http_limit_conn_module configure flag'},
   ];
   const unavailable = checks.filter(item => !item.verified);
   assert.deepEqual(unavailable, [], `Required Nginx modules cannot be verified: ${JSON.stringify(unavailable)}`);

@@ -12,6 +12,8 @@ import type {
   RouteInput,
   RoutingInput,
   StaticSiteInput,
+  TrafficLimitingInput,
+  TrafficLimitStatus,
   TlsInput,
   UpstreamBackendInput,
   UpstreamLoadBalancingInput,
@@ -274,6 +276,64 @@ function validateLogging(input: unknown, path: string): CapabilityValidation<Log
     : success({accessLog: object.value.accessLog, accessLogPath: accessLogPath as string, errorLogPath: errorLogPath.value, errorLogLevel: errorLogLevel as ErrorLogLevel});
 }
 
+function trafficStatus(value: unknown, label: string, path: string): CapabilityValidation<TrafficLimitStatus> {
+  const status = value ?? 429;
+  return status === 429 || status === 503
+    ? success(status)
+    : failure(inputError('composition.traffic-limiting.status', `${label} must be 429 or 503.`, path));
+}
+
+function validateTrafficLimiting(input: unknown, path: string): CapabilityValidation<TrafficLimitingInput> {
+  const object = record(input, path, ['policyId', 'requestLimit', 'connectionLimit']);
+  if (!object.ok) return object;
+  const policyId = stringValue(object.value.policyId, 'Traffic policy ID', `${path}.policyId`);
+  if (!policyId.ok || !/^[a-z](?:[a-z0-9-]{0,23}[a-z0-9])?$/.test(policyId.value)) {
+    return failure(inputError('composition.traffic-limiting.policy-id', 'Traffic policy ID must be 1-25 lowercase letters, digits, or internal hyphens and begin with a letter.', `${path}.policyId`));
+  }
+  if (object.value.requestLimit === undefined && object.value.connectionLimit === undefined) {
+    return failure(inputError('composition.traffic-limiting.empty', 'Enable requestLimit, connectionLimit, or both.', path));
+  }
+
+  let requestLimit: TrafficLimitingInput['requestLimit'];
+  if (object.value.requestLimit !== undefined) {
+    const request = record(object.value.requestLimit, `${path}.requestLimit`, ['rate', 'unit', 'burst', 'nodelay', 'zoneSizeMb', 'statusCode']);
+    if (!request.ok) return request;
+    const rate = boundedInteger(request.value.rate, 'Request rate', `${path}.requestLimit.rate`, 1, 10_000);
+    if (!rate.ok) return rate;
+    const unit = request.value.unit ?? 'second';
+    if (unit !== 'second' && unit !== 'minute') return failure(inputError('composition.traffic-limiting.unit', 'Request rate unit must be second or minute.', `${path}.requestLimit.unit`));
+    const burst = boundedInteger(request.value.burst, 'Request burst', `${path}.requestLimit.burst`, 0, 10_000, 0);
+    if (!burst.ok) return burst;
+    const nodelay = booleanValue(request.value.nodelay, 'Request nodelay', `${path}.requestLimit.nodelay`, false);
+    if (!nodelay.ok) return nodelay;
+    if (nodelay.value && burst.value === 0) return failure(inputError('composition.traffic-limiting.nodelay', 'nodelay requires a positive burst capacity.', `${path}.requestLimit.nodelay`));
+    const zoneSizeMb = boundedInteger(request.value.zoneSizeMb, 'Request zone size', `${path}.requestLimit.zoneSizeMb`, 1, 32, 10);
+    if (!zoneSizeMb.ok) return zoneSizeMb;
+    const statusCode = trafficStatus(request.value.statusCode, 'Request rejection status', `${path}.requestLimit.statusCode`);
+    if (!statusCode.ok) return statusCode;
+    requestLimit = {rate: rate.value, unit, burst: burst.value, nodelay: nodelay.value, zoneSizeMb: zoneSizeMb.value, statusCode: statusCode.value};
+  }
+
+  let connectionLimit: TrafficLimitingInput['connectionLimit'];
+  if (object.value.connectionLimit !== undefined) {
+    const connection = record(object.value.connectionLimit, `${path}.connectionLimit`, ['connections', 'zoneSizeMb', 'statusCode']);
+    if (!connection.ok) return connection;
+    const connections = boundedInteger(connection.value.connections, 'Concurrent connection limit', `${path}.connectionLimit.connections`, 1, 10_000);
+    if (!connections.ok) return connections;
+    const zoneSizeMb = boundedInteger(connection.value.zoneSizeMb, 'Connection zone size', `${path}.connectionLimit.zoneSizeMb`, 1, 32, 10);
+    if (!zoneSizeMb.ok) return zoneSizeMb;
+    const statusCode = trafficStatus(connection.value.statusCode, 'Connection rejection status', `${path}.connectionLimit.statusCode`);
+    if (!statusCode.ok) return statusCode;
+    connectionLimit = {connections: connections.value, zoneSizeMb: zoneSizeMb.value, statusCode: statusCode.value};
+  }
+
+  return success({policyId: policyId.value, ...(requestLimit === undefined ? {} : {requestLimit}), ...(connectionLimit === undefined ? {} : {connectionLimit})});
+}
+
+function trafficZoneName(kind: 'req' | 'conn', policyId: string): string {
+  return `forge_${kind}_${policyId.replaceAll('-', '_')}`;
+}
+
 function parentDirectory(path: string): string {
   return path.slice(0, path.lastIndexOf('/')) || '/';
 }
@@ -324,6 +384,75 @@ const logging: NginxCapabilityDefinition<LoggingInput> = {
         {code: `composition.logging.access.${input.accessLog}`, capabilityId: this.id, context: 'server', semanticIdentity: 'directive:access_log', message: input.accessLog === 'off' ? 'Access logging is explicitly disabled only for this site server context.' : `Access logging uses the trusted ${input.accessLog} preset at server scope.`},
         {code: 'composition.logging.error', capabilityId: this.id, context: 'server', semanticIdentity: 'directive:error_log', message: `Error logging is scoped to this site at ${input.errorLogLevel} severity and above.`},
         ...(input.accessLog === 'forge-json' ? [{code: 'composition.logging.format.json', capabilityId: this.id, context: 'http' as const, semanticIdentity: `log-format:${FORGE_JSON_LOG_FORMAT_NAME}`, message: 'One shared namespaced JSON access-log format uses Nginx escape=json handling and a fixed non-credential field set.'}] : []),
+      ],
+    };
+  },
+};
+
+const trafficLimiting: NginxCapabilityDefinition<TrafficLimitingInput> = {
+  id: 'traffic-limiting',
+  version: '4.3.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'policyId', type: 'string', required: true, description: 'Stable logical identity rendered into separate Forge-owned request and connection zone names.'},
+    {name: 'requestLimit', type: 'object', required: false, description: 'Optional bounded per-client-IP leaky-bucket request policy.'},
+    {name: 'connectionLimit', type: 'object', required: false, description: 'Optional bounded per-client-IP concurrent request/connection policy.'},
+  ]},
+  dependencies: [],
+  incompatibleWith: [],
+  requiresSiteOwner: true,
+  astSurface: {contexts: ['http', 'server'], directives: ['limit_req_zone', 'limit_req', 'limit_req_status', 'limit_conn_zone', 'limit_conn', 'limit_conn_status'], blocks: []},
+  requirements: input => ({
+    minimumNginxVersion: '1.18.0',
+    modules: [
+      ...(input.requestLimit === undefined ? [] : ['http_limit_req' as const]),
+      ...(input.connectionLimit === undefined ? [] : ['http_limit_conn' as const]),
+    ],
+  }),
+  validate: validateTrafficLimiting,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    const requestZone = trafficZoneName('req', input.policyId);
+    const connectionZone = trafficZoneName('conn', input.policyId);
+    const requestDirectives = input.requestLimit === undefined ? [] : [
+      directive('limit_req', [
+        arg.requestLimitZoneReference(`zone=${requestZone}`),
+        ...(input.requestLimit.burst === 0 ? [] : [arg.requestLimitBurst(`burst=${input.requestLimit.burst}`)]),
+        ...(input.requestLimit.nodelay ? [arg.keyword('nodelay')] : []),
+      ], provenance),
+      directive('limit_req_status', [arg.integer(input.requestLimit.statusCode)], provenance),
+    ];
+    const connectionDirectives = input.connectionLimit === undefined ? [] : [
+      directive('limit_conn', [arg.connectionLimitZoneName(connectionZone), arg.integer(input.connectionLimit.connections)], provenance),
+      directive('limit_conn_status', [arg.integer(input.connectionLimit.statusCode)], provenance),
+    ];
+    return {
+      trafficLimiting: {source: provenance, directives: [...requestDirectives, ...connectionDirectives]},
+      sharedHttpNodes: [
+        ...(input.requestLimit === undefined ? [] : [directive('limit_req_zone', [
+          arg.variable('$binary_remote_addr'),
+          arg.requestLimitZoneDefinition(`zone=${requestZone}:${input.requestLimit.zoneSizeMb}m`),
+          arg.requestLimitRate(`rate=${input.requestLimit.rate}r/${input.requestLimit.unit === 'second' ? 's' : 'm'}`),
+        ], provenance)]),
+        ...(input.connectionLimit === undefined ? [] : [directive('limit_conn_zone', [
+          arg.variable('$binary_remote_addr'),
+          arg.connectionLimitZoneDefinition(`zone=${connectionZone}:${input.connectionLimit.zoneSizeMb}m`),
+        ], provenance)]),
+      ],
+      prerequisites: [
+        {code: 'composition.traffic-limiting.client-ip', capabilityId: this.id, kind: 'operator-action', description: 'Verify the trusted real-client configuration before relying on per-IP limits; Forge never trusts forwarded client-IP headers.'},
+        {code: 'composition.traffic-limiting.capacity', capabilityId: this.id, kind: 'operator-action', description: 'Capacity-test rates, bursts, concurrency, shared-memory sizing, and rejection behavior under representative traffic.'},
+        {code: 'composition.traffic-limiting.observability', capabilityId: this.id, kind: 'operator-action', description: 'Monitor limiting rejections and Nginx error logs during a guarded rollout.'},
+      ],
+      explanations: [
+        ...(input.requestLimit === undefined ? [] : [
+          {code: 'composition.traffic-limiting.request-zone', capabilityId: this.id, context: 'http' as const, semanticIdentity: `limit_req_zone:${requestZone}`, message: 'A bounded shared-memory request-rate zone uses only the trusted binary client address key.'},
+          {code: 'composition.traffic-limiting.request', capabilityId: this.id, context: 'server' as const, semanticIdentity: `limit-req:${requestZone}`, message: `Per-client-IP request limiting uses a ${input.requestLimit.rate}r/${input.requestLimit.unit === 'second' ? 's' : 'm'} leaky-bucket policy with burst ${input.requestLimit.burst}${input.requestLimit.nodelay ? ' and nodelay' : ''}.`},
+        ]),
+        ...(input.connectionLimit === undefined ? [] : [
+          {code: 'composition.traffic-limiting.connection-zone', capabilityId: this.id, context: 'http' as const, semanticIdentity: `limit_conn_zone:${connectionZone}`, message: 'A bounded shared-memory connection zone uses only the trusted binary client address key.'},
+          {code: 'composition.traffic-limiting.connection', capabilityId: this.id, context: 'server' as const, semanticIdentity: `limit-conn:${connectionZone}`, message: `Per-client-IP concurrent request/connection processing is capped at ${input.connectionLimit.connections}.`},
+        ]),
+        {code: 'composition.traffic-limiting.redirect-excluded', capabilityId: this.id, context: 'server', semanticIdentity: 'server:https-redirect', message: 'If present, an HTTP-to-HTTPS redirect server is deliberately excluded from traffic limiting.'},
       ],
     };
   },
@@ -561,7 +690,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const definitions = deepFreeze({logging, reverseProxy, routing, staticSite, tls, upstreamLoadBalancing, websocket} as const);
+const definitions = deepFreeze({logging, reverseProxy, routing, staticSite, tls, trafficLimiting, upstreamLoadBalancing, websocket} as const);
 
 export function getCapabilityDefinition(id: string): NginxCapabilityDefinition | undefined {
   return Object.values(definitions).find(definition => definition.id === id);

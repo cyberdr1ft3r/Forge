@@ -14,6 +14,12 @@ export type NginxArgumentKind =
   | 'index-file'
   | 'log-format-name'
   | 'log-format-template'
+  | 'request-limit-zone-definition'
+  | 'connection-limit-zone-definition'
+  | 'request-limit-zone-reference'
+  | 'connection-limit-zone-name'
+  | 'request-limit-rate'
+  | 'request-limit-burst'
   | 'proxy-url'
   | 'upstream-url'
   | 'redirect-url'
@@ -28,6 +34,7 @@ export type NginxArgumentKind =
   | 'quoted';
 
 export type KnownNginxVariable =
+  | '$binary_remote_addr'
   | '$connection_upgrade'
   | '$host'
   | '$http_upgrade'
@@ -59,6 +66,12 @@ export type KnownDirectiveName =
   | 'index'
   | 'keepalive'
   | 'least_conn'
+  | 'limit_conn'
+  | 'limit_conn_status'
+  | 'limit_conn_zone'
+  | 'limit_req'
+  | 'limit_req_status'
+  | 'limit_req_zone'
   | 'listen'
   | 'log_format'
   | 'pid'
@@ -136,6 +149,12 @@ export const nginxArgument = Object.freeze({
   indexFile: (value: string): NginxArgument => ({kind: 'index-file', value}),
   logFormatName: (value: string): NginxArgument => ({kind: 'log-format-name', value}),
   logFormatTemplate: (value: string): NginxArgument => ({kind: 'log-format-template', value}),
+  requestLimitZoneDefinition: (value: string): NginxArgument => ({kind: 'request-limit-zone-definition', value}),
+  connectionLimitZoneDefinition: (value: string): NginxArgument => ({kind: 'connection-limit-zone-definition', value}),
+  requestLimitZoneReference: (value: string): NginxArgument => ({kind: 'request-limit-zone-reference', value}),
+  connectionLimitZoneName: (value: string): NginxArgument => ({kind: 'connection-limit-zone-name', value}),
+  requestLimitRate: (value: string): NginxArgument => ({kind: 'request-limit-rate', value}),
+  requestLimitBurst: (value: string): NginxArgument => ({kind: 'request-limit-burst', value}),
   proxyUrl: (value: string): NginxArgument => ({kind: 'proxy-url', value}),
   upstreamUrl: (value: string): NginxArgument => ({kind: 'upstream-url', value}),
   redirectUrl: (value: string): NginxArgument => ({kind: 'redirect-url', value}),

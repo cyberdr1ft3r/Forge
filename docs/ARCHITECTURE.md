@@ -59,6 +59,8 @@ Issue #14 Phase 4B adds a typed `upstream-load-balancing` capability and a mutua
 
 Issue #14 Phase 4C adds a typed `logging` capability. It applies explicit access- and error-log policy to each Forge-owned server, supports the built-in `combined` format, explicit `access_log off`, and one fixed namespaced JSON preset. JSON format declarations are shared at HTTP scope and deduplicated semantically. File creation, permissions, rotation, retention, capacity monitoring, worker startup, and deployment remain operator responsibilities. See [`NGINX_LOGGING_PHASE4C.md`](NGINX_LOGGING_PHASE4C.md).
 
+Issue #14 Phase 4D adds a typed `traffic-limiting` capability. It models request-rate limiting and concurrent request/connection limiting as separate optional controls, declares bounded per-client-IP zones at HTTP scope, and applies enforcement only to the owning application server. Zone identity, memory allocation, sharing, conflicts, and rejection statuses remain closed and deterministic. See [`NGINX_TRAFFIC_LIMITING_PHASE4D.md`](NGINX_TRAFFIC_LIMITING_PHASE4D.md).
+
 ## Manifest and versioning
 
 Every manifest declares:

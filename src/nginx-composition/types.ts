@@ -1,12 +1,12 @@
 import type {Diagnostic, OutputArtifact, ValidationSummary} from '../core/types.js';
 import type {DirectiveNode, NginxNode, NginxOutputProfile, NginxSourceProvenance} from '../nginx-syntax/types.js';
 
-export type NginxCapabilityId = 'logging' | 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'upstream-load-balancing' | 'websocket';
-export type NginxModule = 'http_log' | 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
+export type NginxCapabilityId = 'logging' | 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'traffic-limiting' | 'upstream-load-balancing' | 'websocket';
+export type NginxModule = 'http_limit_conn' | 'http_limit_req' | 'http_log' | 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
 
 export interface CapabilityInputFieldSchema {
   readonly name: string;
-  readonly type: 'string' | 'integer' | 'boolean' | 'enum' | 'array';
+  readonly type: 'string' | 'integer' | 'boolean' | 'enum' | 'array' | 'object';
   readonly required: boolean;
   readonly description: string;
   readonly values?: readonly string[];
@@ -70,6 +70,11 @@ export interface LoggingContribution {
   readonly source: NginxSourceProvenance;
 }
 
+export interface TrafficLimitingContribution {
+  readonly directives: readonly DirectiveNode[];
+  readonly source: NginxSourceProvenance;
+}
+
 export interface CapabilityContribution {
   readonly domain?: string;
   readonly routes?: readonly PlannedRoute[];
@@ -78,6 +83,7 @@ export interface CapabilityContribution {
   readonly sharedHttpNodes?: readonly NginxNode[];
   readonly staticSite?: StaticSiteContribution;
   readonly logging?: LoggingContribution;
+  readonly trafficLimiting?: TrafficLimitingContribution;
   readonly prerequisites?: readonly CompositionPrerequisite[];
   readonly explanations?: readonly CompositionExplanation[];
 }
@@ -153,7 +159,7 @@ export interface NginxCompositionSuccess {
   readonly provenance: {
     readonly generatedBy: 'Forge';
     readonly engine: 'nginx-capability-composition';
-    readonly version: '2.0.0' | '2.1.0' | '2.2.0' | '2.3.0';
+    readonly version: '2.0.0' | '2.1.0' | '2.2.0' | '2.3.0' | '2.4.0';
     readonly deterministic: true;
     readonly capabilities: readonly {readonly id: NginxCapabilityId; readonly version: string}[];
     readonly sites?: readonly string[];
@@ -245,6 +251,29 @@ export type LoggingInput = {
   readonly errorLogPath: string;
   readonly errorLogLevel: ErrorLogLevel;
 };
+
+export type TrafficLimitStatus = 429 | 503;
+
+export interface RequestLimitInput {
+  readonly rate: number;
+  readonly unit: 'second' | 'minute';
+  readonly burst: number;
+  readonly nodelay: boolean;
+  readonly zoneSizeMb: number;
+  readonly statusCode: TrafficLimitStatus;
+}
+
+export interface ConnectionLimitInput {
+  readonly connections: number;
+  readonly zoneSizeMb: number;
+  readonly statusCode: TrafficLimitStatus;
+}
+
+export interface TrafficLimitingInput {
+  readonly policyId: string;
+  readonly requestLimit?: RequestLimitInput;
+  readonly connectionLimit?: ConnectionLimitInput;
+}
 
 export interface DependencyNode {
   readonly id: string;

@@ -16,7 +16,7 @@ import type {
   PlannedRoute,
 } from './types.js';
 
-const ENGINE_VERSION = '2.3.0' as const;
+const ENGINE_VERSION = '2.4.0' as const;
 const MAX_SITES = 16;
 const MAX_TOTAL_ROUTES = 256;
 const SITE_ID = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -110,6 +110,11 @@ function semanticIdentity(node: NginxNode): string {
   if (node.kind === 'block' && node.blockType === 'map') return `map:${String(node.header[1]?.value)}`;
   if (node.kind === 'block' && node.blockType === 'upstream') return `upstream:${String(node.header[0]?.value)}`;
   if (node.kind === 'directive' && node.name === 'log_format') return `log-format:${String(node.args[0]?.value)}`;
+  if (node.kind === 'directive' && (node.name === 'limit_req_zone' || node.name === 'limit_conn_zone')) {
+    const definition = String(node.args[1]?.value);
+    const zoneName = /^zone=([^:]+):/.exec(definition)?.[1] ?? definition;
+    return `${node.name}:${zoneName}`;
+  }
   return `${node.kind}:${node.kind === 'directive' ? node.name : node.kind === 'block' ? node.blockType : String(node.key.value)}`;
 }
 
@@ -181,7 +186,13 @@ function planSite(id: string, capabilitiesInput: readonly unknown[], request: Ng
     source: scopeSource(logging.source, id),
     directives: logging.directives.map(node => ({...node, source: scopeSource(node.source, id)})),
   };
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite, scopedLogging);
+  const trafficLimiting = contributions.map(item => item.trafficLimiting).find(value => value !== undefined);
+  const scopedTrafficLimiting = trafficLimiting === undefined ? undefined : {
+    ...trafficLimiting,
+    source: scopeSource(trafficLimiting.source, id),
+    directives: trafficLimiting.directives.map(node => ({...node, source: scopeSource(node.source, id)})),
+  };
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite, scopedLogging, scopedTrafficLimiting);
   const explanations = contributions.flatMap(item => item.explanations ?? []).map(item => ({...item, siteId: id}));
   const prerequisites = contributions.flatMap(item => item.prerequisites ?? []).map(item => ({...item, siteId: id}));
   const shared = contributions.flatMap(item => item.sharedHttpNodes ?? []).map(node => ({node: scopeNode(node, id), siteId: id}));
@@ -249,6 +260,13 @@ export function composeNginxSites(request: unknown): NginxCompositionOutcome {
   const explanations = plans.flatMap(plan => plan.explanations);
   const prerequisites = plans.flatMap(plan => plan.prerequisites);
   if (!merged.ok) return failure(merged.diagnostics, plans, explanations, prerequisites, true);
+  const trafficZoneMemoryMb = merged.resources.reduce((total, resource) => {
+    if (resource.node.kind !== 'directive' || (resource.node.name !== 'limit_req_zone' && resource.node.name !== 'limit_conn_zone')) return total;
+    return total + Number(/:(\d+)m$/.exec(String(resource.node.args[1]?.value))?.[1] ?? 0);
+  }, 0);
+  if (trafficZoneMemoryMb > 256) {
+    return failure([error('composition.traffic-limiting.memory-budget', 'Distinct traffic-limiting zones exceed the 256 MiB multi-site shared-memory budget.', 'planned.sharedHttp', 'static')], plans, explanations, prerequisites, true);
+  }
   for (const resource of merged.resources) {
     const representative = explanations.find(item => item.semanticIdentity === resource.identity && (item.context === 'http' || item.context === 'upstream'));
     if (representative !== undefined && resource.siteIds.length > 1) {
