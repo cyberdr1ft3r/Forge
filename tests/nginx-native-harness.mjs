@@ -462,7 +462,7 @@ async function materializeNegative(root, generated) {
     {
       name: 'invalid-request-zone-size', source: 'traffic-request-only',
       mutate: content => content.replace('zone=forge_req_request_only:4m', 'zone=forge_req_request_only:0m'),
-      expected: ['invalid zone size "zone=forge_req_request_only:0m"'],
+      expected: ['zone "zone=forge_req_request_only:0m" is too small'],
     },
     {
       name: 'invalid-request-rate', source: 'traffic-request-only',
