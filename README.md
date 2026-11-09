@@ -16,12 +16,15 @@ npm test
 
 Open http://127.0.0.1:4173.
 
+The landing page links to directly addressable workspaces at `/generators/nginx`, `/generators/compose`, and `/generators/systemd`. Nginx uses the typed capability-composition engine for reverse proxy, HTTPS, WebSocket, static website, SPA fallback, and complete/site-fragment output profiles. Docker Compose and systemd continue to use the versioned generator lifecycle.
+
 Generator code is TypeScript compiled to `dist/` for the browser. The contract, lifecycle, extension guide, validation states, security boundaries, and migration policy are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current limitations
 
 - In-browser input validation is not a native Nginx, Docker Compose, or systemd validation.
 - Native validators are described as unavailable unless the relevant executable actually ran successfully; Forge does not run them in the browser.
+- Target-host files, permissions, modules, and service readiness are not inspected in the browser.
 - The project is a prototype; review generated files before use.
 - No server credentials or deployment automation are involved.
 

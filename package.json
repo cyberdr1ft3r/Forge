@@ -8,9 +8,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "npm run build && node server.js",
     "test": "npm run build && node --test tests/*.test.js",
+    "test:ui": "npm run build && playwright test",
     "test:native:nginx": "npm run build && node tests/nginx-native-harness.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "fflate": "^0.8.3",
     "typescript": "5.9.3"
   }
 }

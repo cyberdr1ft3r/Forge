@@ -12,7 +12,7 @@ The current architecture keeps a small shared lifecycle and makes every technolo
 
 ```text
 src/
-  app.ts                    Browser rendering and copy/download interactions only
+  app.ts                    Route-aware browser UI and typed request adapters
   core/
     errors.ts               Typed public errors
     lifecycle.ts            Contract execution and legacy export adapter
@@ -25,8 +25,11 @@ src/
     systemd.ts              systemd definition
     index.ts                Public API, registry, legacy adapters
   nginx-syntax/             Nginx-specific typed AST, trusted registry, validator and serializer
+  nginx-composition/        Capability planner and single-/multi-site composition APIs
+  ui/zip.ts                 Local deterministic multi-artifact ZIP export
 tests/
   generators.test.js        Contract, regression, determinism, and attack tests
+  browser/                  Real-browser navigation, interaction and responsive tests
 dist/                       Generated browser/Node JavaScript; never committed
 ```
 
@@ -52,6 +55,14 @@ Issue #14 Phase 2 adds the backend capability planner under `src/nginx-compositi
 Issue #14 Phase 3 adds a CI-only native validation harness and official-image compatibility matrix. It validates actual composition artifacts with `nginx -t`, records version/module evidence, and proves representative invalid mutations are rejected. It does not execute in the browser or establish target-host readiness. See [`NGINX_NATIVE_VALIDATION_PHASE3.md`](NGINX_NATIVE_VALIDATION_PHASE3.md).
 
 The multi-site hardening increment adds the additive `composeNginxSites()` API. It orders bounded site plans deterministically, deduplicates shared HTTP AST resources by semantic identity, rejects ambiguous listener/server-name ownership, and carries site provenance through diagnostics and explanations without changing the legacy single-site path. See [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
+
+## Browser integration
+
+The v0.1 browser studio keeps the core generators and Nginx engines independent of DOM concerns. `/generators/nginx` constructs only allow-listed typed capability selections and calls `composeNginxCapabilities()` directly. The first UI surface exposes reverse proxy, TLS/redirect, WebSocket, static-site and SPA workflows with complete-configuration and site-fragment profiles. It renders the full returned artifact array, including required supporting HTTP-context files, and exports multiple files as a browser-local ZIP.
+
+`/generators/compose` and `/generators/systemd` continue to call the registered `tryGenerate` outcomes without changing their manifests, validation, normalization, or generated content. The browser displays the contract validation records rather than inferring success from generated text. Native validation stays `unavailable`, and target-host readiness stays `not-run`, unless a future trusted integration actually performs those checks.
+
+Known application routes are served by the dependency-free development server with an `index.html` fallback. Unknown paths and unsafe traversal still fail instead of receiving the application shell. Configuration output is written to the DOM as text, never interpreted as HTML.
 
 Issue #14 Phase 4A adds one `static-site` capability to the same registry and planning pipeline. A static site can own a validated domain and root location, optionally use an SPA entry fallback, and compose with TLS without a fake upstream. Typed directory, filename, and `try_files` arguments prevent raw filesystem expressions or directive injection. See [`NGINX_STATIC_SITE_PHASE4A.md`](NGINX_STATIC_SITE_PHASE4A.md).
 
@@ -111,7 +122,7 @@ Each result records three required tiers. APIs that need to distinguish deployme
 
 ## Compatibility and migration
 
-The three historic named exports and the `generators` map remain available after compilation. Their visible filename, content, deployment steps, and warning text remain compatible for valid browser inputs; an additive `metadata` field exposes the new contract result. The browser fields and copy/download workflow are unchanged. Generator manifests are the authoritative validation contract. The current browser field descriptors are presentation/compatibility data only and cannot weaken generator validation; making that UI fully manifest-driven belongs to the approved UI work in issue #12.
+The three historic named exports and the `generators` map remain available after compilation. Their filename, content, deployment steps, and warning text remain compatible for valid API callers; an additive `metadata` field exposes the contract result. Generator manifests remain the authoritative validation contract. The browser's Compose and systemd adapters preserve those inputs and outputs, while the Nginx workspace intentionally uses the newer composition artifacts instead of the historic single-file UI adapter.
 
 Malformed inputs are now intentionally stricter: unknown properties, non-matching primitive types (including string/number stand-ins for booleans), and invalid Compose restart policies are rejected instead of coerced, ignored, or defaulted. Browser-originated string ports remain supported and are normalized to integers. systemd arguments accept only literal tokens rather than ambiguous quoting or special syntax. These are correctness and injection-boundary changes. Users needing complex systemd escaping must edit and natively validate the generated unit outside Forge.
 
