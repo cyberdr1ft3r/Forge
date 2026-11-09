@@ -35,6 +35,10 @@ jobs:
           node --check tests/nginx-native-harness.mjs
       - name: Unit tests
         run: npm test
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npm run test:ui
       - name: Dependency security audit
         run: npm audit --audit-level=high
       - name: HTTP smoke test

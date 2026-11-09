@@ -6,7 +6,8 @@ const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=
 createServer(async (req,res)=>{
   try {
     const pathname=decodeURIComponent(new URL(req.url??'/','http://localhost').pathname);
-    const file=resolve(join(root,pathname==='/'?'index.html':pathname));
+    const appRoute=/^\/generators\/(nginx|compose|systemd)\/?$/.test(pathname);
+    const file=resolve(join(root,pathname==='/'||appRoute?'index.html':pathname));
     const fromRoot=relative(root,file);
     if(fromRoot.startsWith('..')||isAbsolute(fromRoot)){res.writeHead(403);return res.end('Forbidden');}
     const data=await readFile(file);
