@@ -33,12 +33,21 @@ jobs:
           node --check tests/nginx-syntax.test.js
           node --check tests/nginx-composition.test.js
           node --check tests/nginx-native-harness.mjs
+          node --check tests/ui-zip.test.js
+          node --check tests/browser/forge.spec.js
       - name: Unit tests
         run: npm test
       - name: Install browser
         run: npx playwright install --with-deps chromium
       - name: Browser tests
         run: npm run test:ui
+      - name: Upload visual review evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-ui-review-${{ github.sha }}
+          path: test-results/**/visual-*.png
+          if-no-files-found: error
+          retention-days: 14
       - name: Dependency security audit
         run: npm audit --audit-level=high
       - name: HTTP smoke test

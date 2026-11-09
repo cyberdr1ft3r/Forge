@@ -34,6 +34,8 @@ const app: HTMLElement = applicationRoot;
 const githubUrl = 'https://github.com/cyberdr1ft3r/Forge';
 const docsUrl = `${githubUrl}/blob/main/docs/ARCHITECTURE.md`;
 const generatorIds: readonly GeneratorId[] = ['nginx', 'compose', 'systemd'];
+const NGINX_TARGET_VERSION = '1.26.3';
+const NGINX_TARGET_MODULES = ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
 const defaults: Record<GeneratorId, Record<string, FieldValue>> = {
   nginx: {
     workflow: 'reverse-proxy', profile: 'full-config', domain: 'app.example.com', targetHost: '127.0.0.1', targetPort: '3000',
@@ -61,9 +63,9 @@ const definitions: Record<GeneratorId, GeneratorDefinition> = {
       {id: 'documentRoot', label: 'Document root', type: 'text', group: 'Static files', description: 'Absolute directory containing the deployed site.', placeholder: '/var/www/example', visible: item => item.workflow === 'static-site'},
       {id: 'indexFile', label: 'Index file', type: 'text', group: 'Static files', description: 'Safe entry filename relative to the document root.', placeholder: 'index.html', visible: item => item.workflow === 'static-site'},
       {id: 'spaFallback', label: 'Single Page Application fallback', type: 'checkbox', group: 'Static files', description: 'Route missing files to the index entry.', visible: item => item.workflow === 'static-site'},
-      {id: 'tls', label: 'Enable HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Requires explicit certificate files on the target host.'},
-      {id: 'certificatePath', label: 'Certificate-chain path', type: 'text', group: 'TLS & protocol', description: 'Absolute path to an existing PEM certificate chain.', visible: item => item.tls === true},
-      {id: 'privateKeyPath', label: 'Private-key path', type: 'text', group: 'TLS & protocol', description: 'Absolute path to a distinct protected PEM private key.', visible: item => item.tls === true},
+      {id: 'tls', label: 'Enable HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Emit explicit certificate references; Forge does not inspect the files.'},
+      {id: 'certificatePath', label: 'Certificate-chain path', type: 'text', group: 'TLS & protocol', description: 'Absolute PEM path to reference; existence and permissions are not checked.', visible: item => item.tls === true},
+      {id: 'privateKeyPath', label: 'Private-key path', type: 'text', group: 'TLS & protocol', description: 'Distinct absolute PEM path to reference; the file is not inspected.', visible: item => item.tls === true},
       {id: 'redirectHttp', label: 'Redirect HTTP to HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Create a separate port 80 redirect server.', visible: item => item.tls === true},
       {id: 'websockets', label: 'Enable WebSocket support', type: 'checkbox', group: 'TLS & protocol', description: 'Add the trusted HTTP upgrade map and route headers.', visible: item => item.workflow === 'reverse-proxy'},
     ],
@@ -95,6 +97,7 @@ const definitions: Record<GeneratorId, GeneratorDefinition> = {
 
 let selected: GeneratorId = 'nginx';
 const values: Record<GeneratorId, Record<string, FieldValue>> = structuredClone(defaults);
+const staleResults: Record<GeneratorId, boolean> = {nginx: false, compose: false, systemd: false};
 let currentResult: UiResult | null = null;
 let selectedArtifactId = '';
 
@@ -113,7 +116,7 @@ function navMarkup(inWorkspace: boolean): string {
     <a class="brand" href="/" data-route><span class="brand-mark" aria-hidden="true">◇</span><span>FORGE</span></a>
     ${inWorkspace ? `<label class="generator-switch"><span class="sr-only">Active generator</span><select id="generator-switch">${generatorIds.map(id => `<option value="${id}"${id === selected ? ' selected' : ''}>Generators / ${definitions[id].label}</option>`).join('')}</select></label>` : ''}
     <nav aria-label="Primary navigation">
-      ${inWorkspace ? '<a href="/generators/nginx" data-route>Workspace</a>' : '<a href="#generators">Generators</a>'}
+      ${inWorkspace ? `<a href="/generators/${selected}" data-route>Workspace</a>` : '<a href="#generators">Generators</a>'}
       <a href="${docsUrl}" target="_blank" rel="noreferrer">Docs</a><a href="${githubUrl}" target="_blank" rel="noreferrer">GitHub</a>
     </nav>
   </header>`;
@@ -154,6 +157,15 @@ function fieldsMarkup(definition: GeneratorDefinition, fieldValues: Readonly<Rec
   return groups.map((group, index) => `<fieldset><legend><span>${String(index + 1).padStart(2, '0')}</span>${group}</legend><div class="field-grid">${visible.filter(field => field.group === group).map(field => fieldMarkup(field, fieldValues)).join('')}</div></fieldset>`).join('');
 }
 
+function nginxCompatibilityMarkup(): string {
+  return `<section class="compatibility-note" aria-labelledby="compatibility-title">
+    <h2 id="compatibility-title">Assumed Nginx compatibility inputs</h2>
+    <p>Forge composes for an assumed Nginx <strong>${NGINX_TARGET_VERSION}</strong> target with these declared modules: <code>${NGINX_TARGET_MODULES.join(', ')}</code>.</p>
+    <p>These are generator inputs, not properties discovered from your server. Forge has not inspected installed modules, certificate files, paths, permissions, or service reachability.</p>
+    <dl><div><dt>Input</dt><dd>Trusted field and capability schemas.</dd></div><div><dt>Static</dt><dd>Forge structural checks over generated artifacts.</dd></div><div><dt>Native</dt><dd><code>nginx -t</code> was not run for your generated files.</dd></div><div><dt>Target host</dt><dd>Your server and filesystem were not inspected.</dd></div></dl>
+  </section>`;
+}
+
 function renderWorkspace(): void {
   const definition = definitions[selected];
   document.title = `${definition.label} Generator — Forge`;
@@ -162,38 +174,50 @@ function renderWorkspace(): void {
       <header class="workspace-heading"><div><p class="overline">${definition.eyebrow}</p><h1>${definition.title}</h1><p>${definition.description}</p></div><a class="back-link" href="/" data-route>All generators</a></header>
       <section class="workspace" aria-label="Generator workspace">
         <div class="panel configuration-panel"><div class="panel-label"><span>01</span> / CONFIGURATION</div>
-          <form id="generator-form" novalidate>${fieldsMarkup(definition, values[selected])}<div id="form-message" class="form-message" role="alert" hidden></div><button class="button button-primary generate-button" type="submit">Generate configuration <span aria-hidden="true">→</span></button><p class="form-note">Inputs remain local. Forge does not connect to servers or run deployment commands.</p></form>
+          <form id="generator-form" novalidate>${fieldsMarkup(definition, values[selected])}${selected === 'nginx' ? nginxCompatibilityMarkup() : ''}<div id="form-message" class="form-message" role="alert" hidden></div><button class="button button-primary generate-button" type="submit">Generate configuration <span aria-hidden="true">→</span></button><p class="form-note">Inputs remain local. Forge does not connect to servers or run deployment commands.</p></form>
         </div>
-        <aside class="panel preview-panel" aria-label="Generated file preview"><div class="panel-label"><span>02</span> / FILE PREVIEW</div><div id="artifact-tabs" class="artifact-tabs" role="tablist" aria-label="Generated artifacts"></div><div class="preview-heading"><div><span class="file-icon" aria-hidden="true">▤</span><strong id="filename">No file generated</strong></div><span id="artifact-role" class="role-badge">Waiting</span></div><pre id="preview" tabindex="0" aria-label="Configuration preview"><code id="output">Complete the form and generate a configuration.</code></pre><div id="preview-message" class="preview-message" aria-live="polite"></div><div class="preview-actions"><button id="copy" type="button" disabled>⧉ Copy</button><button id="download" type="button" disabled>↓ Download</button><button id="download-all" type="button" disabled hidden>↓ ZIP</button><button id="expand" type="button" disabled>⛶ Expand</button></div><section class="details" aria-labelledby="prerequisites-title"><h2 id="prerequisites-title">Prerequisites & cautions</h2><div id="prerequisites"><p>Generate a configuration to see target-host prerequisites.</p></div></section></aside>
+        <aside class="panel preview-panel" aria-label="Generated file preview"><div class="panel-label"><span>02</span> / FILE PREVIEW</div><div id="artifact-tabs" class="artifact-tabs" aria-label="Generated artifacts"></div><div class="preview-heading"><div><span class="file-icon" aria-hidden="true">▤</span><strong id="filename">No file generated</strong></div><span id="artifact-role" class="role-badge">Waiting</span></div><pre id="preview" tabindex="0" aria-label="Configuration preview"><code id="output">Complete the form and generate a configuration.</code></pre><div id="preview-message" class="preview-message" aria-live="polite"></div><div class="preview-actions"><button id="copy" type="button" disabled>⧉ Copy</button><button id="download" type="button" disabled>↓ Download</button><button id="download-all" type="button" disabled hidden>↓ ZIP</button><button id="expand" type="button" disabled>⛶ Expand</button></div><section class="details" aria-labelledby="prerequisites-title"><h2 id="prerequisites-title">Prerequisites & cautions</h2><div id="prerequisites"><p>Generate a configuration to see target-host prerequisites.</p></div></section></aside>
       </section>
     </main>
     <section class="validation-bar" aria-label="Validation status"><strong><span aria-hidden="true">●</span> LOCAL GENERATION</strong><div id="validation-records"><span>○ Input not run</span><span>○ Static checks not run</span><span>△ Native validator unavailable</span><span>○ Target host not checked</span></div></section>
     <dialog id="expanded-preview" aria-labelledby="expanded-title"><div class="dialog-head"><div><p class="panel-label">EXPANDED FILE PREVIEW</p><h2 id="expanded-title">Generated configuration</h2></div><button id="close-expanded" type="button" aria-label="Close expanded preview">×</button></div><pre tabindex="0"><code id="expanded-output"></code></pre></dialog>`;
   bindWorkspace(); bindRoutes();
+  if (staleResults[selected]) renderStaleState();
 }
 
-function captureValues(): void {
+function valuesFingerprint(id: GeneratorId): string {
+  return JSON.stringify(definitions[id].fields.map(field => [field.id, values[id][field.id]]));
+}
+
+function captureValues(): boolean {
   const form = document.getElementById('generator-form');
-  if (!(form instanceof HTMLFormElement)) return;
+  if (!(form instanceof HTMLFormElement)) return false;
+  const before = valuesFingerprint(selected);
   for (const field of definitions[selected].fields) {
     const control = form.elements.namedItem(field.id);
     if (control instanceof HTMLInputElement && field.type === 'checkbox') values[selected][field.id] = control.checked;
     else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) values[selected][field.id] = control.value;
   }
+  return before !== valuesFingerprint(selected);
 }
 function navigate(url: string): void {
   const next = new URL(url, window.location.href); window.history.pushState({}, '', next.pathname); renderRoute();
   document.getElementById('main-content')?.focus({preventScroll: true}); window.scrollTo({top: 0});
 }
 function bindRoutes(): void {
-  document.querySelectorAll<HTMLAnchorElement>('a[data-route]').forEach(link => link.addEventListener('click', event => { event.preventDefault(); captureValues(); navigate(link.href); }));
+  document.querySelectorAll<HTMLAnchorElement>('a[data-route]').forEach(link => link.addEventListener('click', event => {
+    event.preventDefault(); captureValues();
+    const next = new URL(link.href, window.location.href);
+    if (next.pathname !== window.location.pathname) navigate(link.href);
+  }));
 }
 function bindWorkspace(): void {
   const switcher = document.getElementById('generator-switch');
   if (switcher instanceof HTMLSelectElement) switcher.addEventListener('change', () => { captureValues(); if (isGeneratorId(switcher.value)) navigate(`/generators/${switcher.value}`); });
   const form = document.getElementById('generator-form'); if (!(form instanceof HTMLFormElement)) return;
   form.addEventListener('input', event => {
-    captureValues(); const target = event.target; if (target instanceof HTMLElement) clearFieldError(target.id);
+    const changed = captureValues(); const target = event.target; if (target instanceof HTMLElement) clearFieldError(target.id);
+    if (changed && currentResult !== null) invalidateGeneratedResult();
     if (target instanceof HTMLSelectElement && target.id === 'workflow' || target instanceof HTMLInputElement && target.id === 'tls') { renderWorkspace(); document.getElementById(target.id)?.focus(); }
   });
   form.addEventListener('submit', event => { event.preventDefault(); generate(); });
@@ -213,7 +237,7 @@ function nginxRequest(fieldValues: Readonly<Record<string, FieldValue>>): unknow
     if (fieldValues.websockets === true) capabilities.push({id: 'websocket', input: {routes: ['/']}});
   }
   if (fieldValues.tls === true) capabilities.push({id: 'tls', input: {certificatePath: fieldValues.certificatePath, privateKeyPath: fieldValues.privateKeyPath, redirectHttp: fieldValues.redirectHttp}});
-  return {profile: String(fieldValues.profile), target: {version: '1.26.3', modules: ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl']}, capabilities};
+  return {profile: String(fieldValues.profile), target: {version: NGINX_TARGET_VERSION, modules: NGINX_TARGET_MODULES}, capabilities};
 }
 function legacyInput(id: Exclude<GeneratorId, 'nginx'>, fieldValues: Readonly<Record<string, FieldValue>>): Record<string, FieldValue | number> {
   return id === 'compose' ? {...fieldValues, hostPort: numeric(fieldValues.hostPort ?? ''), containerPort: numeric(fieldValues.containerPort ?? '')} : {...fieldValues};
@@ -221,6 +245,7 @@ function legacyInput(id: Exclude<GeneratorId, 'nginx'>, fieldValues: Readonly<Re
 function generate(): void {
   captureValues(); clearErrors();
   currentResult = selected === 'nginx' ? composeNginxCapabilities(nginxRequest(values.nginx)) : outcomes[selected](legacyInput(selected, values[selected]));
+  staleResults[selected] = false;
   selectedArtifactId = currentResult.ok ? currentResult.artifacts[0]?.id ?? '' : ''; renderResult();
 }
 function statusLabel(label: string, record: ValidationRecord): string {
@@ -243,7 +268,13 @@ function renderResult(): void {
 }
 function renderArtifactTabs(artifacts: readonly OutputArtifact[]): void {
   const host = document.getElementById('artifact-tabs'); if (host === null) return; host.replaceChildren(); if (artifacts.length < 2) return;
-  for (const artifact of artifacts) { const button = document.createElement('button'); button.type = 'button'; button.role = 'tab'; button.textContent = artifact.filename; button.dataset.artifactId = artifact.id; button.ariaSelected = String(artifact.id === selectedArtifactId); button.addEventListener('click', () => { selectedArtifactId = artifact.id; renderArtifactTabs(artifacts); renderSelectedArtifact(); }); host.append(button); }
+  for (const artifact of artifacts) {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = artifact.filename; button.dataset.artifactId = artifact.id; button.ariaPressed = String(artifact.id === selectedArtifactId);
+    button.addEventListener('click', () => { selectedArtifactId = artifact.id; updateArtifactSelectionState(); renderSelectedArtifact(); }); host.append(button);
+  }
+}
+function updateArtifactSelectionState(): void {
+  document.querySelectorAll<HTMLButtonElement>('#artifact-tabs button').forEach(button => { button.ariaPressed = String(button.dataset.artifactId === selectedArtifactId); });
 }
 function renderSelectedArtifact(): void {
   const artifact = selectedArtifact(); if (artifact === undefined || currentResult === null || !currentResult.ok) return;
@@ -274,6 +305,23 @@ function renderPrerequisites(items: readonly {readonly description: string; read
   const host = document.getElementById('prerequisites'); if (host === null) return; host.replaceChildren();
   if (items.length === 0) { const paragraph = document.createElement('p'); paragraph.textContent = 'No artifacts were produced, so prerequisites are unavailable.'; host.append(paragraph); return; }
   const list = document.createElement('ul'); for (const item of items) { const entry = document.createElement('li'); entry.textContent = item.path === undefined ? item.description : `${item.description} (${item.path})`; list.append(entry); } host.append(list);
+}
+function renderIdleValidation(): void {
+  const host = document.getElementById('validation-records'); if (host === null) return;
+  const labels = ['○ Input not run', '○ Static checks not run', '△ Native validator unavailable', '○ Target host not checked'];
+  host.replaceChildren(...labels.map(label => { const span = document.createElement('span'); span.textContent = label; return span; }));
+}
+function invalidateGeneratedResult(): void {
+  currentResult = null; selectedArtifactId = ''; staleResults[selected] = true; renderStaleState();
+}
+function renderStaleState(): void {
+  document.getElementById('artifact-tabs')?.replaceChildren();
+  setText('filename', 'Regeneration required'); setText('artifact-role', 'Outdated');
+  setText('output', 'Configuration changed — regenerate to update the output.'); setText('expanded-output', '');
+  setText('preview-message', 'Configuration changed — regenerate to update the output.');
+  setActions(false, false); renderIdleValidation();
+  const host = document.getElementById('prerequisites');
+  if (host !== null) { const paragraph = document.createElement('p'); paragraph.textContent = 'Current inputs have not been generated or checked.'; host.replaceChildren(paragraph); }
 }
 function setActions(enabled: boolean, multiple: boolean): void {
   for (const id of ['copy', 'download', 'expand']) { const button = document.getElementById(id); if (button instanceof HTMLButtonElement) button.disabled = !enabled; }

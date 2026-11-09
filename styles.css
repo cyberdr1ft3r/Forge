@@ -103,12 +103,20 @@ legend span { margin-right: 10px; color: var(--muted); font-size: 10px; letter-s
 .form-message { margin: 8px 0 0; padding: 12px; color: #ffd6db; background: #3a2229; border: 1px solid #70404a; border-radius: 7px; font-size: 12px; line-height: 1.5; }
 .generate-button { width: min(335px, 100%); margin-top: 8px; }
 .form-note { margin: 11px 0 0; color: var(--muted); font-size: 10px; }
+.compatibility-note { margin: 2px 0 20px; padding: 14px; color: var(--muted); background: var(--panel-soft); border: 1px solid var(--line); border-radius: 8px; }
+.compatibility-note h2 { margin: 0 0 9px; color: var(--text); font-size: 12px; }
+.compatibility-note p { margin: 7px 0; font-size: 10px; line-height: 1.55; }
+.compatibility-note code { color: var(--accent); font: inherit; }
+.compatibility-note dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 16px; margin: 11px 0 0; }
+.compatibility-note dl div { min-width: 0; }
+.compatibility-note dt { color: var(--text); font-size: 10px; font-weight: 800; }
+.compatibility-note dd { margin: 2px 0 0; font-size: 10px; line-height: 1.4; }
 
 .preview-panel { display: flex; flex-direction: column; min-height: 690px; }
 .artifact-tabs { display: flex; gap: 6px; margin: 15px 0 5px; overflow-x: auto; }
 .artifact-tabs:empty { display: none; }
 .artifact-tabs button { flex: none; padding: 7px 9px; color: var(--muted); background: var(--panel-soft); border: 1px solid var(--line); border-radius: 6px; font-size: 10px; }
-.artifact-tabs button[aria-selected="true"] { color: #0c1119; background: var(--accent); border-color: var(--accent); }
+.artifact-tabs button[aria-pressed="true"] { color: #0c1119; background: var(--accent); border-color: var(--accent); }
 .preview-heading { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .preview-heading > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .preview-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -165,6 +173,7 @@ dialog pre { height: calc(100% - 83px); padding: 22px; overflow: auto; border: 0
   .workspace { padding: 0 8px; }
   .panel { padding: 17px; }
   .field-grid { grid-template-columns: 1fr; }
+  .compatibility-note dl { grid-template-columns: 1fr; }
   .preview-panel { min-height: 580px; }
   .preview-panel pre { height: 330px; }
   .validation-bar { align-items: flex-start; flex-direction: column; gap: 12px; }

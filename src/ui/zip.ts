@@ -1,6 +1,7 @@
 import type {OutputArtifact} from '../core/types.js';
 
 const encoder = new TextEncoder();
+const SAFE_ARTIFACT_FILENAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
@@ -28,12 +29,18 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
 
 /** Creates a deterministic, uncompressed ZIP locally without executing or uploading configuration content. */
 export function createZipBytes(artifacts: readonly Pick<OutputArtifact, 'filename' | 'content'>[]): Uint8Array {
+  if (artifacts.length === 0 || artifacts.length > 65_535) throw new Error('ZIP export requires between 1 and 65535 artifacts.');
   const localParts: Uint8Array[] = [];
   const centralParts: Uint8Array[] = [];
+  const filenames = new Set<string>();
   let offset = 0;
   for (const artifact of artifacts) {
+    if (!SAFE_ARTIFACT_FILENAME.test(artifact.filename)) throw new Error(`Unsafe ZIP artifact filename: ${artifact.filename}.`);
+    if (filenames.has(artifact.filename)) throw new Error(`Duplicate ZIP artifact filename: ${artifact.filename}.`);
+    filenames.add(artifact.filename);
     const name = encoder.encode(artifact.filename);
     const data = encoder.encode(artifact.content);
+    if (data.length > 0xffffffff) throw new Error(`ZIP artifact is too large: ${artifact.filename}.`);
     const checksum = crc32(data);
     const local = concat([uint32(0x04034b50), uint16(20), uint16(0x0800), uint16(0), uint16(0), uint16(0), uint32(checksum), uint32(data.length), uint32(data.length), uint16(name.length), uint16(0), name, data]);
     localParts.push(local);
