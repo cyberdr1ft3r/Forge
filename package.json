@@ -12,7 +12,7 @@
     "test:native:nginx": "npm run build && node tests/nginx-native-harness.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.65.0",
     "typescript": "5.9.3"
   }
 }
