@@ -16,6 +16,12 @@ npm test
 
 Open http://127.0.0.1:4173.
 
+## Static beta packaging
+
+`npm run build:static` creates the allowlisted browser-only site under `release/site` and a SHA-256 content manifest at `release/forge-v0.1-beta-manifest.json`. The package contains `index.html`, `styles.css`, and only the compiled JavaScript dependency closure required by `/dist/app.js`; it excludes source, tests, source maps, declarations, repository metadata, documentation, and Node.js tooling.
+
+The development server is for loopback development only. Do not expose the repository root or `server.js` as the public beta service. See [`docs/BETA_DEPLOYMENT.md`](docs/BETA_DEPLOYMENT.md) for the reviewed static Nginx deployment and rollback procedure.
+
 Generator code is TypeScript compiled to `dist/` for the browser. The contract, lifecycle, extension guide, validation states, security boundaries, and migration policy are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current limitations
