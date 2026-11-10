@@ -28,10 +28,10 @@ for (const route of ['/', '/generators/nginx', '/generators/compose', '/generato
   if (response.headers['cache-control'] !== 'no-store') throw new Error(`${route} must not be cached.`);
 }
 
-for (const [path, contentType] of [['/styles.css', 'text/css'], ['/dist/app.js', 'text/javascript']]) {
+for (const [path, contentTypes] of [['/styles.css', ['text/css']], ['/dist/app.js', ['application/javascript', 'text/javascript']]]) {
   const response = await request(httpsOrigin, path);
   if (response.status !== 200) throw new Error(`${path} was not served.`);
-  if (!String(response.headers['content-type']).startsWith(contentType)) throw new Error(`${path} has incorrect MIME type.`);
+  if (!contentTypes.some(contentType => String(response.headers['content-type']).startsWith(contentType))) throw new Error(`${path} has incorrect MIME type: ${response.headers['content-type']}.`);
   if (response.headers['cache-control'] !== 'public, max-age=300, must-revalidate') throw new Error(`${path} has incorrect cache policy.`);
   if (response.headers['x-content-type-options'] !== 'nosniff') throw new Error(`${path} lost inherited security headers.`);
 }
