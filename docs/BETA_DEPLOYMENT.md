@@ -97,7 +97,7 @@ Rollback does not undo DNS/CDN caches instantly. Their configuration and recover
 ## Operations and maintenance
 
 - Monitor Nginx availability, TLS expiry, 4xx/5xx rates, asset errors, CSP reports only if a privacy-reviewed reporting endpoint is later approved, disk capacity, and log delivery.
-- Do not log query strings or browser-generated configuration content unless explicitly reviewed; the template uses ordinary Nginx logging defaults and adds no telemetry.
+- The template's minimal access log excludes query strings, referrers, user agents, and browser-generated configuration content. Client IP addresses and timestamps remain operational data; approve their retention, access, redaction, and privacy-policy treatment for the target jurisdiction.
 - Patch the host OS, Nginx, Node build image, GitHub Actions, and npm dependencies under the project's security process.
 - Rebuild and reverify after dependency, compiler, UI, Nginx-template, or CSP changes.
 - Rotate certificates and keys through the operator's secret-management process, never the web root or Git.

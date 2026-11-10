@@ -44,6 +44,7 @@ There are no runtime secrets or environment substitutions in the website. Forge 
 - disables autoindex and version tokens;
 - applies a CSP compatible with same-origin ES modules and external CSS while disabling network connections, plugins, framing, forms, workers, and a permissive fallback;
 - adds HSTS, MIME-sniffing, framing, referrer, permissions, and opener isolation headers.
+- uses a minimal access-log format with client address, time, method, normalized path, protocol, status, and response bytes; it excludes query strings, referrers, user agents, and generated configuration content.
 
 Certificate paths, server name, release root, ports, and public HTTPS origin are placeholders. A real certificate and private key must be provisioned outside the public root with least-privilege permissions.
 
