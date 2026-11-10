@@ -1,6 +1,6 @@
 map $uri $forge_cache_control {
     default                                      "no-store";
-    =/styles.css                                 "public, max-age=300, must-revalidate";
+    /styles.css                                  "public, max-age=300, must-revalidate";
     ~^/dist/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.js$ "public, max-age=300, must-revalidate";
 }
 

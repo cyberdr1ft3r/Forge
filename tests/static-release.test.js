@@ -80,6 +80,8 @@ test('Nginx template allowlists routes and applies an explicit restrictive CSP',
   assert.match(template, /object-src 'none'/u);
   assert.match(template, /frame-ancestors 'none'/u);
   assert.match(template, /Strict-Transport-Security/u);
+  assert.match(template, /^\s*\/styles\.css\s+"public, max-age=300, must-revalidate";/mu);
+  assert.doesNotMatch(template, /^\s*=\/styles\.css/mu);
   assert.doesNotMatch(template, /example\.com|\/var\/www\/html/u);
 });
 
