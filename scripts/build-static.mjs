@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
+import {access, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {dirname, extname, isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
@@ -67,15 +67,16 @@ async function copyPublicFile(source, destinationRoot, publicPath) {
   const target = resolve(destinationRoot, publicPath);
   if (!inside(destinationRoot, target)) throw new Error(`Public path escaped the release root: ${publicPath}`);
   await mkdir(dirname(target), {recursive: true});
-  await copyFile(source, target);
+  const content = await readFile(source, 'utf8');
+  await writeFile(target, content.replace(/\r\n?/gu, '\n'), 'utf8');
 }
 
 async function copyCompiledModule(source, destinationRoot) {
   const publicPath = relative(projectRoot, source);
   const target = resolve(destinationRoot, publicPath);
   if (!inside(destinationRoot, target)) throw new Error(`Compiled module escaped the release root: ${publicPath}`);
-  const compiled = await readFile(source, 'utf8');
-  const withoutSourceMapReference = compiled.replace(/\n?\/\/# sourceMappingURL=.*(?:\r?\n)?$/u, '\n');
+  const compiled = (await readFile(source, 'utf8')).replace(/\r\n?/gu, '\n');
+  const withoutSourceMapReference = compiled.replace(/\n?\/\/# sourceMappingURL=.*\n?$/u, '\n');
   await mkdir(dirname(target), {recursive: true});
   await writeFile(target, withoutSourceMapReference, 'utf8');
 }

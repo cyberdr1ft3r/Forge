@@ -34,6 +34,8 @@ test('static package contains only allowlisted browser assets and their module c
     assert.ok(files.every(path => !/(?:^|\/)(?:src|tests|docs|scripts|ops|node_modules|\.git)(?:\/|$)/u.test(path)));
     assert.ok(files.every(path => !/\.(?:map|ts|tsx|md|json|lock|ya?ml)$/u.test(path)));
 
+    for (const path of files) assert.doesNotMatch(await readFile(resolve(output, path), 'utf8'), /\r/u, `${path} contains platform-specific line endings`);
+
     for (const path of files.filter(path => path.endsWith('.js'))) {
       const source = await readFile(resolve(output, path), 'utf8');
       assert.doesNotMatch(source, /sourceMappingURL/u, `${path} references an excluded source map`);
