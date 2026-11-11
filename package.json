@@ -5,12 +5,18 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:static": "npm run build && node scripts/build-static.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "npm run build && node server.js",
     "test": "npm run build && node --test tests/*.test.js",
+    "test:release": "npm run build:static && node --test tests/static-release.test.js",
+    "test:release:browser": "playwright test -c playwright.release.config.js",
+    "test:release:smoke": "node tests/static-site-smoke.mjs",
+    "verify:static": "node scripts/verify-static-manifest.mjs",
     "test:native:nginx": "npm run build && node tests/nginx-native-harness.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "typescript": "5.9.3"
   }
 }

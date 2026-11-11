@@ -33,6 +33,12 @@ jobs:
           node --check tests/nginx-syntax.test.js
           node --check tests/nginx-composition.test.js
           node --check tests/nginx-native-harness.mjs
+          node --check scripts/build-static.mjs
+          node --check scripts/render-nginx-template.mjs
+          node --check scripts/verify-static-manifest.mjs
+          node --check tests/static-release.test.js
+          node --check tests/static-site-smoke.mjs
+          node --check tests/release-browser/static-site.spec.js
       - name: Unit tests
         run: npm test
       - name: Dependency security audit
@@ -48,6 +54,88 @@ jobs:
           done
           grep -q 'Forge — Configuration Studio' /tmp/forge-home.html || { cat /tmp/forge-server.log; exit 1; }
           curl --fail --silent http://127.0.0.1:4173/dist/generators/index.js -o /dev/null || { cat /tmp/forge-server.log; exit 1; }
+
+  static-release:
+    needs: test
+    # Pin the browser fixture to a supported, stable image instead of inheriting
+    # ubuntu-latest image migrations during release verification.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build allowlisted static release
+        run: |
+          npm run build:static
+          npm run verify:static
+      - name: Create isolated test certificate
+        run: |
+          mkdir -p release/tls release/logs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=localhost' \
+            -keyout release/tls/privkey.pem \
+            -out release/tls/fullchain.pem
+      - name: Render test Nginx configuration
+        env:
+          FORGE_HTTP_PORT: '8080'
+          FORGE_HTTPS_PORT: '8443'
+          FORGE_SERVER_NAME: localhost
+          FORGE_RELEASE_ROOT: /srv/forge/current
+          FORGE_TLS_CERTIFICATE: /etc/nginx/tls/fullchain.pem
+          FORGE_TLS_KEY: /etc/nginx/tls/privkey.pem
+          FORGE_PUBLIC_ORIGIN: https://127.0.0.1:18443
+        run: node scripts/render-nginx-template.mjs --output release/forge-beta.conf
+      - name: Test and start isolated static Nginx
+        run: |
+          image='nginx:1.26.3@sha256:41b194461e4bae16f9b25d68b0976ed4735b89ca625c89aad88e1c1c3b7e8860'
+          common_args=(
+            --read-only
+            --security-opt no-new-privileges
+            --tmpfs /var/cache/nginx
+            --tmpfs /var/run
+            --mount "type=bind,src=$PWD/release/site,dst=/srv/forge/current,readonly"
+            --mount "type=bind,src=$PWD/release/forge-beta.conf,dst=/etc/nginx/conf.d/default.conf,readonly"
+            --mount "type=bind,src=$PWD/release/tls,dst=/etc/nginx/tls,readonly"
+            --mount "type=bind,src=$PWD/release/logs,dst=/var/log/nginx"
+          )
+          docker run --rm "${common_args[@]}" "$image" nginx -t
+          docker run -d --name forge-static-release \
+            -p 18080:8080 -p 18443:8443 \
+            "${common_args[@]}" "$image"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl --fail --silent --insecure https://127.0.0.1:18443/ -o /dev/null; then break; fi
+            sleep 1
+          done
+          RELEASE_ACCESS_LOG=release/logs/access.log npm run test:release:smoke
+      - name: Install release browser
+        # The pinned runner already supplies Chromium's native libraries. Avoid
+        # coupling release verification to live Ubuntu package-mirror access.
+        run: npx playwright install chromium
+      - name: Desktop and mobile release smoke
+        env:
+          RELEASE_HTTPS_URL: https://127.0.0.1:18443
+        run: npm run test:release:browser
+      - name: Stop isolated static Nginx
+        if: always()
+        run: |
+          docker logs forge-static-release 2>/dev/null || true
+          docker rm -f forge-static-release >/dev/null 2>&1 || true
+      - name: Upload static release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-v0.1-beta-static-${{ github.sha }}
+          path: |
+            release/site/
+            release/forge-v0.1-beta-manifest.json
+            release/forge-beta.conf
+            release/logs/access.log
+          if-no-files-found: error
+          retention-days: 14
 
   nginx-native:
     needs: test
