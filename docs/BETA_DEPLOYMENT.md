@@ -69,7 +69,7 @@ Test the candidate by an isolated listener, preview host, or local host-header o
 - CSS and JavaScript have correct MIME types and `nosniff`;
 - the CSP produces no violations during representative desktop/mobile flows;
 - HTTP redirects to the approved HTTPS origin and the certificate chain/hostname are valid;
-- HTML/deep routes are not cached and unhashed assets revalidate within five minutes;
+- HTML/deep routes are not cached; fixed-name CSS and JavaScript use `no-cache` plus ETag so every reuse revalidates against the active release;
 - generated files are reviewed and their native validation/target-readiness labels remain accurate;
 - access/error logs arrive at the approved sink without secrets or generated configuration content.
 

@@ -84,7 +84,10 @@ test('Nginx template allowlists routes and applies an explicit restrictive CSP',
   assert.match(template, /Strict-Transport-Security/u);
   assert.match(template, /log_format forge_static[^;]*\$request_method \$uri \$server_protocol[^;]*;/u);
   assert.doesNotMatch(template, /log_format forge_static[^;]*(?:\$request_uri|\$args|\$http_referer|\$http_user_agent)/u);
-  assert.match(template, /^\s*\/styles\.css\s+"public, max-age=300, must-revalidate";/mu);
+  assert.equal((template.match(/access_log \/var\/log\/nginx\/access\.log forge_static;/gu) ?? []).length, 2);
+  assert.match(template, /^\s*\/styles\.css\s+"no-cache";/mu);
+  assert.match(template, /^\s*~\^\/dist\/[^\n]+"no-cache";/mu);
+  assert.doesNotMatch(template, /max-age=300|must-revalidate/u);
   assert.doesNotMatch(template, /^\s*=\/styles\.css/mu);
   assert.doesNotMatch(template, /example\.com|\/var\/www\/html/u);
 });

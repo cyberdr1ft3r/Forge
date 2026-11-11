@@ -40,11 +40,11 @@ There are no runtime secrets or environment substitutions in the website. Forge 
 - serves exactly `/`, `/index.html`, `/styles.css`, required `/dist/**/*.js`, and the three generator routes;
 - returns 404 for unknown routes, missing assets, hidden files, source files, repository/internal directories, and common private/configuration extensions;
 - supplies CSS and JavaScript MIME types through the Nginx MIME table;
-- sends HTML/deep routes with `Cache-Control: no-store` and unhashed CSS/JavaScript with a five-minute revalidation policy;
+- sends HTML/deep routes with `Cache-Control: no-store` and fixed-name CSS/JavaScript with `Cache-Control: no-cache`; browser reuse therefore requires immediate ETag validation and cannot retain a fresh pre-switch asset lifetime;
 - disables autoindex and version tokens;
 - applies a CSP compatible with same-origin ES modules and external CSS while disabling network connections, plugins, framing, forms, workers, and a permissive fallback;
 - adds HSTS, MIME-sniffing, framing, referrer, permissions, and opener isolation headers.
-- uses a minimal access-log format with client address, time, method, normalized path, protocol, status, and response bytes; it excludes query strings, referrers, user agents, and generated configuration content.
+- applies the same explicit minimal access-log format to both HTTP redirects and HTTPS content, retaining client address, time, method, normalized path, protocol, status, and response bytes while excluding query strings, referrers, user agents, and generated configuration content.
 
 Certificate paths, server name, release root, ports, and public HTTPS origin are placeholders. A real certificate and private key must be provisioned outside the public root with least-privilege permissions.
 

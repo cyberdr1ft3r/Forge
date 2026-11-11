@@ -1,7 +1,7 @@
 map $uri $forge_cache_control {
     default                                      "no-store";
-    /styles.css                                  "public, max-age=300, must-revalidate";
-    ~^/dist/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.js$ "public, max-age=300, must-revalidate";
+    /styles.css                                  "no-cache";
+    ~^/dist/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.js$ "no-cache";
 }
 
 log_format forge_static '$remote_addr [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
@@ -10,6 +10,8 @@ server {
     listen __FORGE_HTTP_PORT__;
     listen [::]:__FORGE_HTTP_PORT__;
     server_name __FORGE_SERVER_NAME__;
+    access_log /var/log/nginx/access.log forge_static;
+    error_log /var/log/nginx/error.log warn;
     return 308 __FORGE_PUBLIC_ORIGIN__$request_uri;
 }
 
