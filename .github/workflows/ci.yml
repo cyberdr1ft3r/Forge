@@ -57,7 +57,9 @@ jobs:
 
   static-release:
     needs: test
-    runs-on: ubuntu-latest
+    # Pin the browser fixture to a supported, stable image instead of inheriting
+    # ubuntu-latest image migrations during release verification.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
