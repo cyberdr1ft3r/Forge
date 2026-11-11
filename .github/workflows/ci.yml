@@ -113,7 +113,9 @@ jobs:
           done
           RELEASE_ACCESS_LOG=release/logs/access.log npm run test:release:smoke
       - name: Install release browser
-        run: npx playwright install --with-deps chromium
+        # The pinned runner already supplies Chromium's native libraries. Avoid
+        # coupling release verification to live Ubuntu package-mirror access.
+        run: npx playwright install chromium
       - name: Desktop and mobile release smoke
         env:
           RELEASE_HTTPS_URL: https://127.0.0.1:18443
