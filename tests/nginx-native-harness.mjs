@@ -51,13 +51,16 @@ function runProcess(command, args, {timeoutMs = PROCESS_TIMEOUT_MS} = {}) {
   });
 }
 
-function dockerSecurityArguments() {
+function dockerContainerUser() {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
-  if (uid === undefined || gid === undefined) throw new Error('A numeric Linux UID/GID is required for isolated fixture access.');
+  return uid === undefined || gid === undefined ? '101:101' : `${uid}:${gid}`;
+}
+
+function dockerSecurityArguments() {
   return [
     '--rm', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--user', `${uid}:${gid}`,
+    '--user', dockerContainerUser(),
     '--read-only', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5',
     '--tmpfs', '/tmp:rw,noexec,nosuid,mode=1777,size=16m',
     '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,mode=1777,size=16m',
@@ -604,11 +607,12 @@ async function materializeParserAcceptedPolicyRejection(root, generated) {
 }
 
 async function main() {
-  if (process.platform !== 'linux') throw new Error('Native Nginx validation is confined to an explicitly invoked Linux test environment.');
+  if (process.platform !== 'linux' && process.platform !== 'win32') throw new Error('Native Nginx validation requires Linux or Windows with a Linux-container Docker engine.');
   const options = parseArguments(process.argv.slice(2));
   await mkdir(dirname(options.report), {recursive: true});
   const root = await mkdtemp(join(tmpdir(), 'forge-nginx-native-'));
-  const report = {schemaVersion: '1.1', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser: `${process.getuid()}:${process.getgid()}`, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: [], policyWarnings: [], parserAcceptedPolicyRejections: []};
+  const containerUser = dockerContainerUser();
+  const report = {schemaVersion: '1.1', image: options.image, isolation: {network: 'none', readOnlyRoot: true, capabilities: 'all-dropped', noNewPrivileges: true, containerUser, timeoutMs: PROCESS_TIMEOUT_MS}, positive: [], negative: [], policyWarnings: [], parserAcceptedPolicyRejections: []};
   try {
     const pull = await runProcess('docker', ['pull', options.image], {timeoutMs: PULL_TIMEOUT_MS});
     requireSuccess(pull, `Pull ${options.image}`);

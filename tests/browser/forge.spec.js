@@ -3,7 +3,7 @@ import {test, expect} from '@playwright/test';
 test('landing page is truthful and routes into every supported generator', async ({page}, testInfo) => {
   await page.goto('/');
   await expect(page.getByRole('heading', {name: 'Infrastructure configs, composed with intent.'})).toBeVisible();
-  await expect(page.getByText('Coming soon')).toBeVisible();
+  await expect(page.getByText('Coming later')).toBeVisible();
   await expect(page.getByText(/testimonials|customers|deploy now/i)).toHaveCount(0);
   await page.screenshot({path: testInfo.outputPath('landing.png')});
   for (const path of ['/generators/nginx', '/generators/compose', '/generators/systemd']) {
@@ -40,7 +40,7 @@ test('Nginx uses typed composition, field diagnostics, TLS, and honest validatio
   await page.goto('/generators/nginx');
   await expect(page.getByRole('heading', {name: 'Assumed Nginx compatibility inputs'})).toBeVisible();
   await expect(page.getByText(/assumed Nginx 1\.26\.3 target/)).toBeVisible();
-  await expect(page.getByText(/http_log, http_map, http_proxy, http_rewrite, http_ssl/)).toBeVisible();
+  await expect(page.getByText(/http_limit_conn, http_limit_req, http_log, http_map, http_proxy, http_rewrite, http_ssl/)).toBeVisible();
   await expect(page.getByText(/not properties discovered from your server/)).toBeVisible();
   await expect(page.getByText(/nginx -t.*was not run/)).toBeVisible();
   await page.getByLabel('Domain name').fill('bad; include /tmp/x');
@@ -162,6 +162,32 @@ test('static website and SPA fallback invoke the matching capability flow', asyn
   await expect(page.locator('#output')).toContainText('root /srv/www/app;');
   await expect(page.locator('#output')).toContainText('try_files $uri $uri/ /index.html;');
   await expect(page.locator('#output')).not.toContainText('proxy_pass');
+});
+
+test('traffic-limiting controls map to typed request and connection capabilities', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Enable per-IP request limiting').check();
+  await page.getByLabel('Enable per-IP connection limiting').check();
+  await page.getByLabel('Traffic policy ID').fill('edge-api');
+  await page.getByLabel('Requests per interval').fill('25');
+  await page.getByLabel('Request burst').fill('40');
+  await page.getByLabel('Concurrent requests per IP').fill('75');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.locator('#output')).toContainText('limit_req_zone $binary_remote_addr zone=forge_req_edge_api:10m rate=25r/s;');
+  await expect(page.locator('#output')).toContainText('limit_conn_zone $binary_remote_addr zone=forge_conn_edge_api:10m;');
+  await expect(page.locator('#output')).toContainText('limit_req zone=forge_req_edge_api burst=40 nodelay;');
+  await expect(page.locator('#output')).toContainText('limit_conn forge_conn_edge_api 75;');
+  await expect(page.getByText('✓ Input passed')).toBeVisible();
+});
+
+test('traffic policy injection is rejected without producing an artifact', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Enable per-IP request limiting').check();
+  await page.getByLabel('Traffic policy ID').fill('edge; include /tmp/x');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.getByLabel('Traffic policy ID')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('No artifact was created.')).toBeVisible();
+  await expect(page.getByRole('button', {name: 'Copy'})).toBeDisabled();
 });
 
 test('mobile layout stacks panels and retains labelled keyboard controls', async ({page}, testInfo) => {

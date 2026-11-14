@@ -58,7 +58,7 @@ The multi-site hardening increment adds the additive `composeNginxSites()` API. 
 
 ## Browser integration
 
-The browser studio keeps the core generators and Nginx engines independent of DOM concerns. `/generators/nginx` constructs only allow-listed typed capability selections and calls `composeNginxCapabilities()` directly. The first UI surface exposes reverse proxy, TLS/redirect, WebSocket, static-site and SPA workflows with complete-configuration and site-fragment profiles. It renders the full returned artifact array, including required supporting HTTP-context files, and exports multiple files as a browser-local ZIP.
+The browser studio keeps the core generators and Nginx engines independent of DOM concerns. `/generators/nginx` constructs only allow-listed typed capability selections and calls `composeNginxCapabilities()` directly. The current UI surface exposes reverse proxy, TLS/redirect, WebSocket, static-site, SPA, and per-IP request/connection limiting with complete-configuration and site-fragment profiles. It renders the full returned artifact array, including required supporting HTTP-context files, and exports multiple files as a browser-local ZIP. Collection-based logging, routing, upstream, and multi-site editors remain M1 work.
 
 `/generators/compose` and `/generators/systemd` continue to call the registered `tryGenerate` outcomes without changing their manifests, validation, normalization, or generated content. The browser displays the contract validation records rather than inferring success from generated text. Native validation stays `unavailable`, and target-host readiness stays `not-run`, unless a future trusted integration actually performs those checks.
 

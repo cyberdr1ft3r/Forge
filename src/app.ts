@@ -35,12 +35,14 @@ const githubUrl = 'https://github.com/cyberdr1ft3r/Forge';
 const docsUrl = `${githubUrl}/blob/main/docs/ARCHITECTURE.md`;
 const generatorIds: readonly GeneratorId[] = ['nginx', 'compose', 'systemd'];
 const NGINX_TARGET_VERSION = '1.26.3';
-const NGINX_TARGET_MODULES = ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
+const NGINX_TARGET_MODULES = ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
 const defaults: Record<GeneratorId, Record<string, FieldValue>> = {
   nginx: {
     workflow: 'reverse-proxy', profile: 'full-config', domain: 'app.example.com', targetHost: '127.0.0.1', targetPort: '3000',
     tls: false, certificatePath: '/etc/nginx/certs/app.example.com.pem', privateKeyPath: '/etc/nginx/private/app.example.com.key',
     redirectHttp: true, websockets: false, documentRoot: '/var/www/example', indexFile: 'index.html', spaFallback: false,
+    requestLimit: false, connectionLimit: false, policyId: 'public-api', requestRate: '10', requestUnit: 'second', requestBurst: '20', requestNoDelay: true,
+    requestZoneMb: '10', requestStatus: '429', connectionCount: '100', connectionZoneMb: '10', connectionStatus: '429',
   },
   compose: {service: 'web', image: 'nginx:stable', hostPort: '8080', containerPort: '80', restart: 'unless-stopped'},
   systemd: {service: 'myapp', description: 'My application', user: 'appuser', workdir: '/opt/myapp', executable: '/usr/bin/node', arguments: 'server.js'},
@@ -68,6 +70,18 @@ const definitions: Record<GeneratorId, GeneratorDefinition> = {
       {id: 'privateKeyPath', label: 'Private-key path', type: 'text', group: 'TLS & protocol', description: 'Distinct absolute PEM path to reference; the file is not inspected.', visible: item => item.tls === true},
       {id: 'redirectHttp', label: 'Redirect HTTP to HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Create a separate port 80 redirect server.', visible: item => item.tls === true},
       {id: 'websockets', label: 'Enable WebSocket support', type: 'checkbox', group: 'TLS & protocol', description: 'Add the trusted HTTP upgrade map and route headers.', visible: item => item.workflow === 'reverse-proxy'},
+      {id: 'requestLimit', label: 'Enable per-IP request limiting', type: 'checkbox', group: 'Traffic limiting', description: 'Use Nginx leaky-bucket request limiting keyed only by $binary_remote_addr.'},
+      {id: 'connectionLimit', label: 'Enable per-IP connection limiting', type: 'checkbox', group: 'Traffic limiting', description: 'Limit Nginx-tracked concurrent request processing keyed only by $binary_remote_addr.'},
+      {id: 'policyId', label: 'Traffic policy ID', type: 'text', group: 'Traffic limiting', description: 'Stable lowercase identity for engine-owned shared zones.', visible: item => item.requestLimit === true || item.connectionLimit === true},
+      {id: 'requestRate', label: 'Requests per interval', type: 'number', group: 'Request limit', description: 'Integer request rate from 1 to 10,000.', visible: item => item.requestLimit === true},
+      {id: 'requestUnit', label: 'Request interval', type: 'select', group: 'Request limit', description: 'Apply the request rate per second or per minute.', options: [{value: 'second', label: 'Second'}, {value: 'minute', label: 'Minute'}], visible: item => item.requestLimit === true},
+      {id: 'requestBurst', label: 'Request burst', type: 'number', group: 'Request limit', description: 'Queued burst allowance from 0 to 10,000.', visible: item => item.requestLimit === true},
+      {id: 'requestNoDelay', label: 'Reject burst overflow without delay', type: 'checkbox', group: 'Request limit', description: 'Emit nodelay for accepted burst requests.', visible: item => item.requestLimit === true},
+      {id: 'requestZoneMb', label: 'Request zone size (MiB)', type: 'number', group: 'Request limit', description: 'Shared-memory zone size from 1 to 32 MiB.', visible: item => item.requestLimit === true},
+      {id: 'requestStatus', label: 'Request rejection status', type: 'select', group: 'Request limit', description: 'Return 429 or 503 when the request limit rejects traffic.', options: [{value: '429', label: '429 Too Many Requests'}, {value: '503', label: '503 Service Unavailable'}], visible: item => item.requestLimit === true},
+      {id: 'connectionCount', label: 'Concurrent requests per IP', type: 'number', group: 'Connection limit', description: 'Concurrent Nginx request-processing limit from 1 to 10,000.', visible: item => item.connectionLimit === true},
+      {id: 'connectionZoneMb', label: 'Connection zone size (MiB)', type: 'number', group: 'Connection limit', description: 'Shared-memory zone size from 1 to 32 MiB.', visible: item => item.connectionLimit === true},
+      {id: 'connectionStatus', label: 'Connection rejection status', type: 'select', group: 'Connection limit', description: 'Return 429 or 503 when the connection limit rejects traffic.', options: [{value: '429', label: '429 Too Many Requests'}, {value: '503', label: '503 Service Unavailable'}], visible: item => item.connectionLimit === true},
     ],
   },
   compose: {
@@ -218,7 +232,7 @@ function bindWorkspace(): void {
   form.addEventListener('input', event => {
     const changed = captureValues(); const target = event.target; if (target instanceof HTMLElement) clearFieldError(target.id);
     if (changed && currentResult !== null) invalidateGeneratedResult();
-    if (target instanceof HTMLSelectElement && target.id === 'workflow' || target instanceof HTMLInputElement && target.id === 'tls') { renderWorkspace(); document.getElementById(target.id)?.focus(); }
+    if (target instanceof HTMLSelectElement && target.id === 'workflow' || target instanceof HTMLInputElement && ['tls', 'requestLimit', 'connectionLimit'].includes(target.id)) { renderWorkspace(); document.getElementById(target.id)?.focus(); }
   });
   form.addEventListener('submit', event => { event.preventDefault(); generate(); });
   document.getElementById('copy')?.addEventListener('click', () => void copySelected());
@@ -237,6 +251,17 @@ function nginxRequest(fieldValues: Readonly<Record<string, FieldValue>>): unknow
     if (fieldValues.websockets === true) capabilities.push({id: 'websocket', input: {routes: ['/']}});
   }
   if (fieldValues.tls === true) capabilities.push({id: 'tls', input: {certificatePath: fieldValues.certificatePath, privateKeyPath: fieldValues.privateKeyPath, redirectHttp: fieldValues.redirectHttp}});
+  if (fieldValues.requestLimit === true || fieldValues.connectionLimit === true) {
+    const trafficInput: Record<string, unknown> = {policyId: fieldValues.policyId};
+    if (fieldValues.requestLimit === true) trafficInput.requestLimit = {
+      rate: numeric(fieldValues.requestRate ?? ''), unit: fieldValues.requestUnit, burst: numeric(fieldValues.requestBurst ?? ''), nodelay: fieldValues.requestNoDelay,
+      zoneSizeMb: numeric(fieldValues.requestZoneMb ?? ''), statusCode: numeric(fieldValues.requestStatus ?? ''),
+    };
+    if (fieldValues.connectionLimit === true) trafficInput.connectionLimit = {
+      connections: numeric(fieldValues.connectionCount ?? ''), zoneSizeMb: numeric(fieldValues.connectionZoneMb ?? ''), statusCode: numeric(fieldValues.connectionStatus ?? ''),
+    };
+    capabilities.push({id: 'traffic-limiting', input: trafficInput});
+  }
   return {profile: String(fieldValues.profile), target: {version: NGINX_TARGET_VERSION, modules: NGINX_TARGET_MODULES}, capabilities};
 }
 function legacyInput(id: Exclude<GeneratorId, 'nginx'>, fieldValues: Readonly<Record<string, FieldValue>>): Record<string, FieldValue | number> {
