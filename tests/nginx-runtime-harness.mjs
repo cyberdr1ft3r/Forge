@@ -32,6 +32,12 @@ function run(command, args, timeoutMs = 30_000) {
   });
 }
 
+function containerUser() {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return uid === undefined || gid === undefined ? '101:101' : `${uid}:${gid}`;
+}
+
 function httpsRequest(port, {method = 'GET', headers = {}, body} = {}) {
   return new Promise((resolveResult, reject) => {
     const request = https.request({hostname: '127.0.0.1', port, path: '/', method, rejectUnauthorized: false, headers: {host: 'runtime.example.com', ...headers}}, response => {
@@ -52,7 +58,8 @@ async function main() {
   const name = `forge-nginx-runtime-${process.pid}`;
   const network = `${name}-network`;
   const port = 18444;
-  const report = {schemaVersion: '1.0', image: options.image, isolation: {dedicatedNetwork: true, readOnlyRoot: true, unprivilegedUser: '101:101', capabilitiesDropped: true}, assertions: {}};
+  const unprivilegedUser = containerUser();
+  const report = {schemaVersion: '1.0', image: options.image, isolation: {dedicatedNetwork: true, readOnlyRoot: true, unprivilegedUser, capabilitiesDropped: true}, assertions: {}};
   try {
     await mkdir(join(root, 'www'));
     await writeFile(join(root, 'www', 'index.html'), 'Forge isolated runtime response '.repeat(128));
@@ -74,7 +81,7 @@ async function main() {
 
     const networkResult = await run('docker', ['network', 'create', network]);
     assert.equal(networkResult.exitCode, 0, networkResult.stderr);
-    const started = await run('docker', ['run', '-d', '--name', name, '--network', network, '--publish', `127.0.0.1:${port}:443`, '--user', '101:101', '--read-only', '--cap-drop', 'ALL', '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5', '--tmpfs', '/tmp:rw,noexec,nosuid,mode=1777,size=16m', '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,mode=1777,size=16m', '--tmpfs', '/var/run:rw,noexec,nosuid,mode=1777,size=4m', '--volume', `${root}:/fixtures:ro`, '--entrypoint', 'nginx', options.image, '-g', 'daemon off; pid /tmp/nginx.pid;', '-c', '/fixtures/nginx.conf']);
+    const started = await run('docker', ['run', '-d', '--name', name, '--network', network, '--publish', `127.0.0.1:${port}:443`, '--user', unprivilegedUser, '--read-only', '--cap-drop', 'ALL', '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5', '--tmpfs', '/tmp:rw,noexec,nosuid,mode=1777,size=16m', '--tmpfs', '/var/cache/nginx:rw,noexec,nosuid,mode=1777,size=16m', '--tmpfs', '/var/run:rw,noexec,nosuid,mode=1777,size=4m', '--volume', `${root}:/fixtures:ro`, '--entrypoint', 'nginx', options.image, '-g', 'daemon off; pid /tmp/nginx.pid;', '-c', '/fixtures/nginx.conf']);
     assert.equal(started.exitCode, 0, started.stderr);
     let response;
     for (let attempt = 0; attempt < 20; attempt += 1) {
