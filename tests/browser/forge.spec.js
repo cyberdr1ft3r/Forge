@@ -46,7 +46,7 @@ test('Nginx uses typed composition, field diagnostics, TLS, and honest validatio
   await page.getByLabel('Domain name').fill('bad; include /tmp/x');
   await page.getByRole('button', {name: 'Generate configuration'}).click();
   await expect(page.getByLabel('Domain name')).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator('#domain-error')).not.toBeEmpty();
+  await expect(page.locator('[data-field-wrap]').filter({has: page.getByLabel('Domain name')}).locator('.field-error')).not.toBeEmpty();
   await expect(page.getByText('No artifact was created.')).toBeVisible();
 
   await page.getByLabel('Domain name').fill('secure.example.com');
@@ -65,6 +65,7 @@ test('Nginx uses typed composition, field diagnostics, TLS, and honest validatio
 test('WebSocket site fragments retain supporting artifacts and export copy, files, ZIP, and expansion', async ({page, context}, testInfo) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
   await page.getByLabel('Output profile').selectOption('site-fragment');
   await page.getByLabel('Enable WebSocket support').check();
   await page.getByRole('button', {name: 'Generate configuration'}).click();
@@ -125,6 +126,7 @@ async function captureFullPageEvidence(page, path) {
 
 test('edited Nginx, Compose, and systemd inputs invalidate stale output until regeneration', async ({page}) => {
   await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
   await page.getByLabel('Output profile').selectOption('site-fragment');
   await page.getByLabel('Enable WebSocket support').check();
   await page.getByRole('button', {name: 'Generate configuration'}).click();
@@ -166,11 +168,12 @@ test('static website and SPA fallback invoke the matching capability flow', asyn
 
 test('traffic-limiting controls map to typed request and connection capabilities', async ({page}) => {
   await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
   await page.getByLabel('Enable per-IP request limiting').check();
   await page.getByLabel('Enable per-IP connection limiting').check();
   await page.getByLabel('Traffic policy ID').fill('edge-api');
   await page.getByLabel('Requests per interval').fill('25');
-  await page.getByLabel('Request burst').fill('40');
+  await page.getByLabel('Burst', {exact: true}).fill('40');
   await page.getByLabel('Concurrent requests per IP').fill('75');
   await page.getByRole('button', {name: 'Generate configuration'}).click();
   await expect(page.locator('#output')).toContainText('limit_req_zone $binary_remote_addr zone=forge_req_edge_api:10m rate=25r/s;');
@@ -182,11 +185,66 @@ test('traffic-limiting controls map to typed request and connection capabilities
 
 test('traffic policy injection is rejected without producing an artifact', async ({page}) => {
   await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
   await page.getByLabel('Enable per-IP request limiting').check();
   await page.getByLabel('Traffic policy ID').fill('edge; include /tmp/x');
   await page.getByRole('button', {name: 'Generate configuration'}).click();
   await expect(page.getByLabel('Traffic policy ID')).toHaveAttribute('aria-invalid', 'true');
   await expect(page.getByText('No artifact was created.')).toBeVisible();
+  await expect(page.getByRole('button', {name: 'Copy'})).toBeDisabled();
+});
+
+test('advanced Nginx Studio composes multi-site, routes, upstreams, passive failures, logging, and SPA output', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
+  await page.getByLabel('Output profile').selectOption('site-fragment');
+  await page.getByLabel('Use a load-balanced upstream group').check();
+  await page.getByLabel('Balancing strategy').selectOption('least-connections');
+  await page.getByLabel('Weight').first().fill('4');
+  await page.getByLabel('Maximum failures').first().fill('3');
+  await page.getByLabel('Failure timeout (seconds)').first().fill('45');
+  await page.getByRole('button', {name: 'Add route'}).click();
+  await expect(page.getByLabel('Location prefix')).toBeFocused();
+  await page.getByLabel('Location prefix').fill('/socket/');
+  await page.getByLabel('Enable WebSocket upgrade').check();
+  await page.getByLabel('Configure site logging').check();
+  await page.getByLabel('Access-log preset').selectOption('forge-json');
+
+  await page.getByRole('button', {name: 'Add site'}).click();
+  await expect(page.getByLabel('Site ID').nth(1)).toBeFocused();
+  await page.getByLabel('Site ID').nth(1).fill('static-app');
+  await page.getByLabel('Domain name').nth(1).fill('static.example.com');
+  await page.getByLabel('Workflow').nth(1).selectOption('static-site');
+  await page.getByLabel('Document root').fill('/srv/www/static-app');
+  await page.getByLabel('Single Page Application fallback').check();
+
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.locator('#output')).toContainText('location /socket/');
+  await expect(page.locator('#output')).toContainText('server_name static.example.com;');
+  await expect(page.locator('#output')).toContainText('try_files $uri $uri/ /index.html;');
+  await page.getByRole('button', {name: 'http-shared.conf'}).click();
+  await expect(page.locator('#output')).toContainText('least_conn;');
+  await expect(page.locator('#output')).toContainText('weight=4 max_fails=3 fail_timeout=45s');
+  await expect(page.locator('#output')).toContainText('log_format forge_json');
+  await expect(page.getByRole('button', {name: 'ZIP'})).toBeEnabled();
+});
+
+test('dynamic Nginx collections invalidate stale output and keep security diagnostics contextual', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await page.getByRole('button', {name: 'Add route'}).click();
+  await expectStaleResult(page);
+  await page.getByLabel('Target host').fill('127.0.0.1; include /tmp/payload');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.getByLabel('Target host')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('No artifact was created.')).toBeVisible();
+
+  await page.getByLabel('Target host').fill('127.0.0.1');
+  await page.getByRole('button', {name: 'Add site'}).click();
+  await page.getByLabel('Domain name').nth(1).fill('app.example.com');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.locator('.site-message').filter({hasText: /conflict|overlap|same server name/i}).first()).toBeVisible();
   await expect(page.getByRole('button', {name: 'Copy'})).toBeDisabled();
 });
 
@@ -211,6 +269,7 @@ test('captures reproducible Forge visual review evidence at fixed viewports', as
   await captureFullPageEvidence(page, testInfo.outputPath('visual-landing-desktop.png'));
 
   await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
   await page.getByRole('button', {name: 'Generate configuration'}).click();
   await captureFullPageEvidence(page, testInfo.outputPath('visual-nginx-generated-desktop.png'));
 

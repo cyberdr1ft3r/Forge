@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, codex/m0-repository-consolidation]
 permissions:
   contents: read
 jobs:
@@ -32,6 +32,7 @@ jobs:
           node --check tests/generators.test.js
           node --check tests/nginx-syntax.test.js
           node --check tests/nginx-composition.test.js
+          node --check tests/nginx-studio.test.js
           node --check tests/nginx-native-harness.mjs
           node --check tests/ui-zip.test.js
           node --check tests/browser/forge.spec.js

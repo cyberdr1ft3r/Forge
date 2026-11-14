@@ -16,7 +16,7 @@ npm test
 
 Open http://127.0.0.1:4173.
 
-The landing page links to directly addressable workspaces at `/generators/nginx`, `/generators/compose`, and `/generators/systemd`. Nginx uses the typed capability-composition engine for reverse proxy, HTTPS, WebSocket, static website, SPA fallback, and complete/site-fragment output profiles. Docker Compose and systemd continue to use the versioned generator lifecycle.
+The landing page links to directly addressable workspaces at `/generators/nginx`, `/generators/compose`, and `/generators/systemd`. Nginx Studio uses the typed capability-composition engine for multi-site reverse proxy and static/SPA sites, route collections, WebSocket upgrades, upstream groups, weighted round robin or least-connections, passive failure controls, logging, TLS, traffic limiting, and complete/site-fragment output profiles. Docker Compose and systemd continue to use the versioned generator lifecycle.
 
 ## Static release packaging
 
@@ -29,6 +29,8 @@ Generator code is TypeScript compiled to `dist/` for the browser. The contract, 
 ## Current limitations
 
 - In-browser input validation is not a native Nginx, Docker Compose, or systemd validation.
+- Nginx Studio intentionally supports a reviewed subset rather than raw directives. Active health checks, cache/header policy, compression, authentication, certificate automation, and arbitrary Nginx extensions are outside the current engine contract.
+- Logging rotation, filesystem permissions, DNS/service reachability, certificate presence, and production-host readiness remain operator responsibilities.
 - Native validators are described as unavailable unless the relevant executable actually ran successfully; Forge does not run them in the browser.
 - Target-host files, permissions, modules, and service readiness are not inspected in the browser.
 - The first public release is gated on the v1.0.0 roadmap; review generated files before use.
