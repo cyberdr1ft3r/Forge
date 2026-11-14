@@ -39,8 +39,8 @@ test('direct routes and persistent switcher preserve generator functionality', a
 test('Nginx uses typed composition, field diagnostics, TLS, and honest validation states', async ({page}) => {
   await page.goto('/generators/nginx');
   await expect(page.getByRole('heading', {name: 'Assumed Nginx compatibility inputs'})).toBeVisible();
-  await expect(page.getByText(/assumed Nginx 1\.26\.3 target/)).toBeVisible();
-  await expect(page.getByText(/http_limit_conn, http_limit_req, http_log, http_map, http_proxy, http_rewrite, http_ssl/)).toBeVisible();
+  await expect(page.getByText(/assumed Nginx 1\.30\.6 target/)).toBeVisible();
+  await expect(page.getByText(/http_gzip, http_headers, http_limit_conn, http_limit_req, http_log, http_map, http_proxy, http_rewrite, http_ssl/)).toBeVisible();
   await expect(page.getByText(/not properties discovered from your server/)).toBeVisible();
   await expect(page.getByText(/nginx -t.*was not run/)).toBeVisible();
   await page.getByLabel('Domain name').fill('bad; include /tmp/x');
@@ -246,6 +246,60 @@ test('dynamic Nginx collections invalidate stale output and keep security diagno
   await page.getByRole('button', {name: 'Generate configuration'}).click();
   await expect(page.locator('.site-message').filter({hasText: /conflict|overlap|same server name/i}).first()).toBeVisible();
   await expect(page.getByRole('button', {name: 'Copy'})).toBeDisabled();
+});
+
+test('M1-B security and performance controls map to typed Nginx capabilities', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
+  await page.getByLabel('Enable HTTPS').check();
+  await page.getByLabel('Enable secure response headers').check();
+  await page.getByLabel('Security preset').selectOption('strict');
+  await page.getByLabel('HSTS policy').selectOption('one-year');
+  await page.getByLabel('Configure bounded request handling').check();
+  await page.getByLabel('Maximum request body (MiB)').fill('25');
+  await page.getByLabel('Proxy read timeout (seconds)').fill('180');
+  await page.getByLabel('Enable gzip compression').check();
+  await page.getByLabel('MIME preset').selectOption('broad');
+  await page.getByLabel('Compression level').fill('6');
+  await page.getByLabel('Configure proxy buffering').check();
+  await page.getByLabel('Buffering profile').selectOption('streaming');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  const output = page.locator('#output');
+  await expect(output).toContainText('add_header Content-Security-Policy');
+  await expect(output).toContainText('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;');
+  await expect(output).toContainText('client_max_body_size 25m;');
+  await expect(output).toContainText('proxy_read_timeout 180s;');
+  await expect(output).toContainText('gzip_comp_level 6;');
+  await expect(output).toContainText('proxy_buffering off;');
+  await expect(output).toContainText('proxy_request_buffering off;');
+  await expect(page.getByText(/Compression can expose secrets/)).toBeVisible();
+  await expect(page.getByText('✓ Input passed')).toBeVisible();
+});
+
+test('M1-B dependencies, bounds and injection diagnostics block export at the field', async ({page}) => {
+  await page.goto('/generators/nginx');
+  await page.getByLabel('Configuration mode').selectOption('advanced');
+  await page.getByLabel('Enable secure response headers').check();
+  await page.getByLabel('HSTS policy').selectOption('one-year');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.getByLabel('HSTS policy')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('No artifact was created.')).toBeVisible();
+
+  await page.getByLabel('HSTS policy').selectOption('off');
+  await page.getByLabel('Configure bounded request handling').check();
+  await page.getByLabel('Proxy connect timeout (seconds)').fill('76');
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.getByLabel('Proxy connect timeout (seconds)')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByRole('button', {name: 'Copy'})).toBeDisabled();
+
+  await page.getByLabel('Proxy connect timeout (seconds)').evaluate(input => {
+    input.type = 'text';
+    input.value = '10; return 200';
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+  await page.getByRole('button', {name: 'Generate configuration'}).click();
+  await expect(page.getByLabel('Proxy connect timeout (seconds)')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('No artifact was created.')).toBeVisible();
 });
 
 test('mobile layout stacks panels and retains labelled keyboard controls', async ({page}, testInfo) => {

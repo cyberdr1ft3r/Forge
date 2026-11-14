@@ -14,7 +14,8 @@
     "test:release:browser": "playwright test -c playwright.release.config.js",
     "test:release:smoke": "node tests/static-site-smoke.mjs",
     "verify:static": "node scripts/verify-static-manifest.mjs",
-    "test:native:nginx": "npm run build && node tests/nginx-native-harness.mjs"
+    "test:native:nginx": "npm run build && node tests/nginx-native-harness.mjs",
+    "test:runtime:nginx": "npm run build && node tests/nginx-runtime-harness.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",

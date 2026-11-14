@@ -1,8 +1,8 @@
 import type {Diagnostic, OutputArtifact, ValidationSummary} from '../core/types.js';
 import type {DirectiveNode, NginxNode, NginxOutputProfile, NginxSourceProvenance} from '../nginx-syntax/types.js';
 
-export type NginxCapabilityId = 'logging' | 'reverse-proxy' | 'routing' | 'static-site' | 'tls' | 'traffic-limiting' | 'upstream-load-balancing' | 'websocket';
-export type NginxModule = 'http_limit_conn' | 'http_limit_req' | 'http_log' | 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
+export type NginxCapabilityId = 'compression' | 'logging' | 'proxy-buffering' | 'request-timeouts' | 'reverse-proxy' | 'routing' | 'security-headers' | 'static-site' | 'tls' | 'traffic-limiting' | 'upstream-load-balancing' | 'websocket';
+export type NginxModule = 'http_gzip' | 'http_headers' | 'http_limit_conn' | 'http_limit_req' | 'http_log' | 'http_map' | 'http_proxy' | 'http_rewrite' | 'http_ssl';
 
 export interface CapabilityInputFieldSchema {
   readonly name: string;
@@ -84,6 +84,12 @@ export interface CapabilityContribution {
   readonly staticSite?: StaticSiteContribution;
   readonly logging?: LoggingContribution;
   readonly trafficLimiting?: TrafficLimitingContribution;
+  /** Typed directives applied only to the application server, never a redirect server. */
+  readonly serverDirectives?: readonly DirectiveNode[];
+  /** Typed directives that require the application server to terminate HTTPS. */
+  readonly httpsOnlyDirectives?: readonly DirectiveNode[];
+  /** Reject this contribution when the selected site owner is not reverse-proxy. */
+  readonly requiresProxyOwner?: boolean;
   readonly prerequisites?: readonly CompositionPrerequisite[];
   readonly explanations?: readonly CompositionExplanation[];
 }
@@ -159,7 +165,7 @@ export interface NginxCompositionSuccess {
   readonly provenance: {
     readonly generatedBy: 'Forge';
     readonly engine: 'nginx-capability-composition';
-    readonly version: '2.0.0' | '2.1.0' | '2.2.0' | '2.3.0' | '2.4.0';
+    readonly version: '2.0.0' | '2.1.0' | '2.2.0' | '2.3.0' | '2.4.0' | '2.5.0';
     readonly deterministic: true;
     readonly capabilities: readonly {readonly id: NginxCapabilityId; readonly version: string}[];
     readonly sites?: readonly string[];
@@ -273,6 +279,45 @@ export interface TrafficLimitingInput {
   readonly policyId: string;
   readonly requestLimit?: RequestLimitInput;
   readonly connectionLimit?: ConnectionLimitInput;
+}
+
+export type SecurityHeaderPreset = 'balanced' | 'strict';
+export type HstsPreset = 'off' | 'one-year' | 'two-years-preload';
+
+export interface SecurityHeadersInput {
+  readonly preset: SecurityHeaderPreset;
+  readonly hsts: HstsPreset;
+}
+
+export interface ProxyTimeoutInput {
+  readonly connectSeconds: number;
+  readonly sendSeconds: number;
+  readonly readSeconds: number;
+}
+
+export interface RequestTimeoutsInput {
+  readonly clientMaxBodySizeMb: number;
+  readonly clientBodyTimeoutSeconds: number;
+  readonly clientHeaderTimeoutSeconds: number;
+  readonly sendTimeoutSeconds: number;
+  readonly proxy?: ProxyTimeoutInput;
+}
+
+export interface CompressionInput {
+  readonly types: readonly string[];
+  readonly minLengthBytes: number;
+  readonly level: number;
+  readonly vary: boolean;
+}
+
+export type ProxyBufferingProfile = 'bounded' | 'streaming';
+
+export interface ProxyBufferingInput {
+  readonly profile: ProxyBufferingProfile;
+  readonly bufferSizeKb?: number;
+  readonly bufferCount?: number;
+  readonly busyBuffersSizeKb?: number;
+  readonly maxTempFileSizeMb?: number;
 }
 
 export interface DependencyNode {

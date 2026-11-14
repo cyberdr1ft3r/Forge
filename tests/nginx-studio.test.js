@@ -84,3 +84,33 @@ test('nested backend diagnostics resolve to stable dynamic editor controls', () 
   assert.ok(diagnostic);
   assert.equal(diagnosticTarget(diagnostic.path, built.diagnosticTargets), nginxControlId(state.sites[0].backends[1].key, 'host'));
 });
+
+test('Studio maps M1-B controls through versioned capabilities with field diagnostics', () => {
+  const state = createDefaultNginxStudioState();
+  state.mode = 'advanced';
+  const site = state.sites[0];
+  site.tls = true;
+  site.securityHeaders = true;
+  site.securityHeaderPreset = 'strict';
+  site.hstsPreset = 'one-year';
+  site.requestTimeouts = true;
+  site.compression = true;
+  site.compressionPreset = 'broad';
+  site.proxyBuffering = true;
+  site.proxyBufferingProfile = 'bounded';
+  const built = buildNginxStudioRequest(state);
+  assert.deepEqual(built.request.sites[0].capabilities.slice(-4).map(item => item.id), ['security-headers', 'request-timeouts', 'compression', 'proxy-buffering']);
+  const outcome = composeNginxSites(built.request);
+  assert.equal(outcome.ok, true, JSON.stringify(outcome.diagnostics));
+  assert.match(outcome.artifacts[0].content, /add_header Content-Security-Policy/u);
+  assert.match(outcome.artifacts[0].content, /gzip on;/u);
+  assert.match(outcome.artifacts[0].content, /proxy_buffers 8 8k;/u);
+
+  site.proxyConnectTimeoutSeconds = '10; return 200';
+  const malicious = buildNginxStudioRequest(state);
+  const rejected = composeNginxSites(malicious.request);
+  assert.equal(rejected.ok, false);
+  const diagnostic = rejected.diagnostics.find(item => item.path?.endsWith('.proxy.connectSeconds'));
+  assert.ok(diagnostic);
+  assert.equal(diagnosticTarget(diagnostic.path, malicious.diagnosticTargets), nginxControlId(site.key, 'proxyConnectTimeoutSeconds'));
+});

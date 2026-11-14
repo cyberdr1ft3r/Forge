@@ -9,7 +9,7 @@ const PROCESS_TIMEOUT_MS = 30_000;
 const PULL_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const OFFICIAL_IMAGE = /^nginx:(\d+\.\d+\.\d+)(?:@sha256:[a-f0-9]{64})?$/;
-const REQUIRED_MODULES = ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
+const REQUIRED_MODULES = ['http_gzip', 'http_headers', 'http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'];
 
 function parseArguments(argv) {
   const result = {image: undefined, report: undefined};
@@ -149,6 +149,15 @@ function trafficCapability(policyId, overrides = {}) {
   }};
 }
 
+const securityHeaders = {id: 'security-headers', input: {preset: 'balanced', hsts: 'one-year'}};
+const requestTimeouts = {id: 'request-timeouts', input: {
+  clientMaxBodySizeMb: 16, clientBodyTimeoutSeconds: 60, clientHeaderTimeoutSeconds: 30, sendTimeoutSeconds: 60,
+  proxy: {connectSeconds: 15, sendSeconds: 60, readSeconds: 90},
+}};
+const compression = {id: 'compression', input: {types: ['text/css', 'application/json'], minLengthBytes: 1024, level: 5, vary: true}};
+const boundedBuffering = {id: 'proxy-buffering', input: {profile: 'bounded', bufferSizeKb: 16, bufferCount: 8, busyBuffersSizeKb: 64, maxTempFileSizeMb: 128}};
+const streamingBuffering = {id: 'proxy-buffering', input: {profile: 'streaming'}};
+
 async function materializePositive(root, version) {
   const definitions = [
     ['http-reverse-proxy', [proxy], 'full-config'],
@@ -188,6 +197,10 @@ async function materializePositive(root, version) {
   fixtures.push({...await materializeComposition(root, 'traffic-connection-only', compose(compositionRequest(version, [proxy, connectionOnly]), 'traffic-connection-only'), 'full-config'), source: 'forge-traffic-limiting-output'});
   fixtures.push({...await materializeComposition(root, 'traffic-both-custom', compose(compositionRequest(version, [proxy, bothCustom]), 'traffic-both-custom'), 'full-config'), source: 'forge-traffic-limiting-output'});
   fixtures.push({...await materializeComposition(root, 'traffic-tls-websocket', compose(compositionRequest(version, [proxy, websocketRoot, tls(true), trafficCapability('tls-websocket')]), 'traffic-tls-websocket'), 'full-config'), source: 'forge-traffic-limiting-output'});
+
+  fixtures.push({...await materializeComposition(root, 'security-performance-full', compose(compositionRequest(version, [proxy, tls(true), securityHeaders, requestTimeouts, compression, boundedBuffering]), 'security-performance-full'), 'full-config'), source: 'forge-security-performance-output'});
+  fixtures.push({...await materializeComposition(root, 'security-performance-streaming', compose(compositionRequest(version, [proxy, requestTimeouts, compression, streamingBuffering]), 'security-performance-streaming'), 'full-config'), source: 'forge-security-performance-output'});
+  fixtures.push({...await materializeComposition(root, 'security-performance-site-fragment', compose(compositionRequest(version, [proxy, tls(false), securityHeaders, requestTimeouts, compression, boundedBuffering], 'site-fragment'), 'security-performance-site-fragment'), 'site-fragment'), source: 'forge-security-performance-output'});
 
   const httpSites = [nativeSite('alpha', 'alpha.example.com', 3101), nativeSite('bravo', 'bravo.example.com', 3102)];
   const multiHttp = composeSites(multiRequest(version, httpSites), 'multi-http-sites');
@@ -337,6 +350,16 @@ async function materializePositive(root, version) {
   assert.equal(staticProxyConflict.ok, false, 'Forge must reject static and proxy ownership of the root location');
   const staticWebSocketConflict = composeNginxCapabilities(compositionRequest(version, [staticCapability('app.example.com', '/fixtures/shared/static-standard', true), proxy, websocketRoot]));
   assert.equal(staticWebSocketConflict.ok, false, 'Forge must reject SPA fallback combined with proxy/WebSocket root ownership');
+  const unsafeHeader = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'security-headers', input: {preset: 'balanced', hsts: 'off', raw: 'add_header X-Pwned yes;'}}]));
+  assert.equal(unsafeHeader.ok, false, 'Forge must reject arbitrary security-header fields');
+  const hstsWithoutTls = composeNginxCapabilities(compositionRequest(version, [proxy, securityHeaders]));
+  assert.equal(hstsWithoutTls.ok, false, 'Forge must reject HSTS without TLS');
+  const unsafeMime = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'compression', input: {...compression.input, types: ['text/css; include /tmp/pwned']}}]));
+  assert.equal(unsafeMime.ok, false, 'Forge must reject injected compression media types');
+  const excessiveTimeout = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'request-timeouts', input: {...requestTimeouts.input, proxy: {...requestTimeouts.input.proxy, connectSeconds: 76}}}]));
+  assert.equal(excessiveTimeout.ok, false, 'Forge must reject proxy connect timeouts beyond the supported native bound');
+  const excessiveBuffers = composeNginxCapabilities(compositionRequest(version, [proxy, {id: 'proxy-buffering', input: {...boundedBuffering.input, busyBuffersSizeKb: 128}}]));
+  assert.equal(excessiveBuffers.ok, false, 'Forge must reject a busy buffer budget that consumes the complete pool');
   return {fixtures, generated: new Map(fixtures.map(item => [item.name, item])), policy: {
     duplicateListenerNameRejected: true,
     wildcardHostRejected: true,
@@ -355,6 +378,11 @@ async function materializePositive(root, version) {
     unsafeTrafficIdentityRejected: true,
     invalidTrafficBoundsRejected: true,
     contradictorySharedTrafficZoneRejected: true,
+    arbitraryHeaderFieldRejected: true,
+    hstsWithoutTlsRejected: true,
+    unsafeCompressionTypeRejected: true,
+    excessiveProxyConnectTimeoutRejected: true,
+    excessiveProxyBufferBudgetRejected: true,
   }};
 }
 
@@ -363,7 +391,12 @@ async function materializeComposition(root, name, result, profile) {
   await mkdir(directory, {recursive: true});
   for (const output of result.artifacts) await writeFile(join(directory, output.filename), output.content, {encoding: 'utf8', mode: 0o600});
   if (profile === 'site-fragment') {
-    const wrapper = `events {}\nhttp {\n  include /fixtures/${name}/http-shared.conf;\n  include /fixtures/${name}/site.conf;\n}\n`;
+    const filenames = new Set(result.artifacts.map(output => output.filename));
+    const includes = [
+      ...(filenames.has('http-shared.conf') ? [`  include /fixtures/${name}/http-shared.conf;`] : []),
+      `  include /fixtures/${name}/site.conf;`,
+    ].join('\n');
+    const wrapper = `events {}\nhttp {\n${includes}\n}\n`;
     await writeFile(join(directory, 'nginx.conf'), wrapper, {encoding: 'utf8', mode: 0o600});
   }
   return {name, directory, config: join(directory, 'nginx.conf'), profile};
@@ -501,6 +534,26 @@ async function materializeNegative(root, generated) {
       name: 'duplicate-conflicting-request-zone', source: 'traffic-request-only',
       mutate: content => content.replace('    limit_req_zone $binary_remote_addr zone=forge_req_request_only:4m rate=5r/s;', '    limit_req_zone $binary_remote_addr zone=forge_req_request_only:4m rate=5r/s;\n    limit_req_zone $binary_remote_addr zone=forge_req_request_only:8m rate=5r/s;'),
       expected: ['conflicts with already declared size'],
+    },
+    {
+      name: 'invalid-gzip-level', source: 'security-performance-full',
+      mutate: content => content.replace('gzip_comp_level 5;', 'gzip_comp_level 10;'),
+      expected: ['value must be between 1 and 9'],
+    },
+    {
+      name: 'invalid-proxy-buffers-count', source: 'security-performance-full',
+      mutate: content => content.replace('proxy_buffers 8 16k;', 'proxy_buffers 1 16k;'),
+      expected: ['there must be at least 2 "proxy_buffers"'],
+    },
+    {
+      name: 'invalid-proxy-busy-buffer-budget', source: 'security-performance-full',
+      mutate: content => content.replace('proxy_busy_buffers_size 64k;', 'proxy_busy_buffers_size 128k;'),
+      expected: ['must be less than the size of all "proxy_buffers" minus one buffer'],
+    },
+    {
+      name: 'invalid-add-header-context', source: 'security-performance-full',
+      mutate: content => content.replace('events {', 'events {\n    add_header X-Test "invalid" always;'),
+      expected: ['"add_header" directive is not allowed here'],
     },
   ];
   const fixtures = [];

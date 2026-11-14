@@ -18,7 +18,7 @@ import {
 
 const target = {
   version: '1.24.0',
-  modules: ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
+  modules: ['http_gzip', 'http_headers', 'http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
 };
 
 const reverseProxy = {
@@ -104,7 +104,7 @@ test('multi-site API is additive and keeps legacy single-site artifacts byte-ide
 
   const multi = composeSites([siteProxy('app', 'app.example.com')]);
   assert.equal(multi.ok, true);
-  assert.equal(multi.provenance.version, '2.4.0');
+  assert.equal(multi.provenance.version, '2.5.0');
   assert.deepEqual(multi.provenance.sites, ['app']);
   assert.equal(multi.artifacts[0].content, before.artifacts[0].content);
 });
@@ -201,9 +201,9 @@ test('multi-site expansion remains bounded', () => {
   assert.ok(result.diagnostics.some(item => item.code === 'composition.sites.count'));
 });
 
-test('capability registry is typed, versioned, immutable, and includes the Phase 4 shelves', () => {
+test('capability registry is typed, versioned, immutable, and includes the M1-B shelves', () => {
   const definitions = listCapabilityDefinitions();
-  assert.deepEqual(definitions.map(item => item.id).sort(), ['logging', 'reverse-proxy', 'routing', 'static-site', 'tls', 'traffic-limiting', 'upstream-load-balancing', 'websocket']);
+  assert.deepEqual(definitions.map(item => item.id).sort(), ['compression', 'logging', 'proxy-buffering', 'request-timeouts', 'reverse-proxy', 'routing', 'security-headers', 'static-site', 'tls', 'traffic-limiting', 'upstream-load-balancing', 'websocket']);
   assert.ok(definitions.every(item => /^\d+\.\d+\.\d+$/.test(item.version)));
   assert.ok(definitions.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(definitions.every(item => item.astSurface.contexts.length > 0));
