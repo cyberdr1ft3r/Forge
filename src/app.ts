@@ -1,7 +1,20 @@
 import {outcomes} from './generators/index.js';
-import {composeNginxCapabilities} from './nginx-composition/index.js';
+import {composeNginxSites} from './nginx-composition/index.js';
 import type {Diagnostic, GenerationOutcome, OutputArtifact, ValidationRecord, ValidationSummary} from './core/types.js';
-import type {CapabilitySelection, NginxCompositionOutcome} from './nginx-composition/types.js';
+import type {NginxCompositionOutcome} from './nginx-composition/types.js';
+import {
+  buildNginxStudioRequest,
+  createDefaultNginxStudioState,
+  createNginxBackend,
+  createNginxRoute,
+  createNginxSite,
+  diagnosticTarget,
+  nginxControlId,
+  NGINX_STUDIO_LIMITS,
+  NGINX_STUDIO_TARGET_MODULES,
+  NGINX_STUDIO_TARGET_VERSION,
+} from './ui/nginx-studio.js';
+import type {NginxStudioBackend, NginxStudioRoute, NginxStudioSite} from './ui/nginx-studio.js';
 import {createZipBlob} from './ui/zip.js';
 
 type GeneratorId = 'nginx' | 'compose' | 'systemd';
@@ -34,16 +47,8 @@ const app: HTMLElement = applicationRoot;
 const githubUrl = 'https://github.com/cyberdr1ft3r/Forge';
 const docsUrl = `${githubUrl}/blob/main/docs/ARCHITECTURE.md`;
 const generatorIds: readonly GeneratorId[] = ['nginx', 'compose', 'systemd'];
-const NGINX_TARGET_VERSION = '1.26.3';
-const NGINX_TARGET_MODULES = ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
 const defaults: Record<GeneratorId, Record<string, FieldValue>> = {
-  nginx: {
-    workflow: 'reverse-proxy', profile: 'full-config', domain: 'app.example.com', targetHost: '127.0.0.1', targetPort: '3000',
-    tls: false, certificatePath: '/etc/nginx/certs/app.example.com.pem', privateKeyPath: '/etc/nginx/private/app.example.com.key',
-    redirectHttp: true, websockets: false, documentRoot: '/var/www/example', indexFile: 'index.html', spaFallback: false,
-    requestLimit: false, connectionLimit: false, policyId: 'public-api', requestRate: '10', requestUnit: 'second', requestBurst: '20', requestNoDelay: true,
-    requestZoneMb: '10', requestStatus: '429', connectionCount: '100', connectionZoneMb: '10', connectionStatus: '429',
-  },
+  nginx: {},
   compose: {service: 'web', image: 'nginx:stable', hostPort: '8080', containerPort: '80', restart: 'unless-stopped'},
   systemd: {service: 'myapp', description: 'My application', user: 'appuser', workdir: '/opt/myapp', executable: '/usr/bin/node', arguments: 'server.js'},
 };
@@ -51,38 +56,8 @@ const defaults: Record<GeneratorId, Record<string, FieldValue>> = {
 const definitions: Record<GeneratorId, GeneratorDefinition> = {
   nginx: {
     label: 'Nginx', eyebrow: 'NGINX / CAPABILITY COMPOSITION', title: 'Nginx configuration',
-    description: 'Compose a reverse proxy or static site from Forge’s typed capability engine, then inspect every required artifact.',
-    fields: [
-      {id: 'workflow', label: 'Workflow', type: 'select', group: 'Site type', description: 'Choose the capability set that owns this site.', options: [
-        {value: 'reverse-proxy', label: 'Reverse proxy'}, {value: 'static-site', label: 'Static website'},
-      ]},
-      {id: 'profile', label: 'Output profile', type: 'select', group: 'Site type', description: 'Complete configuration includes events/http contexts; a site fragment may require supporting files.', options: [
-        {value: 'full-config', label: 'Complete nginx.conf'}, {value: 'site-fragment', label: 'Site fragment'},
-      ]},
-      {id: 'domain', label: 'Domain name', type: 'text', group: 'Connection', description: 'Exact fully qualified server name.', placeholder: 'app.example.com'},
-      {id: 'targetHost', label: 'Upstream host', type: 'text', group: 'Connection', description: 'Literal hostname or IP reachable from Nginx.', placeholder: '127.0.0.1', visible: item => item.workflow === 'reverse-proxy'},
-      {id: 'targetPort', label: 'Upstream port', type: 'number', group: 'Connection', description: 'TCP port from 1 to 65535.', placeholder: '3000', visible: item => item.workflow === 'reverse-proxy'},
-      {id: 'documentRoot', label: 'Document root', type: 'text', group: 'Static files', description: 'Absolute directory containing the deployed site.', placeholder: '/var/www/example', visible: item => item.workflow === 'static-site'},
-      {id: 'indexFile', label: 'Index file', type: 'text', group: 'Static files', description: 'Safe entry filename relative to the document root.', placeholder: 'index.html', visible: item => item.workflow === 'static-site'},
-      {id: 'spaFallback', label: 'Single Page Application fallback', type: 'checkbox', group: 'Static files', description: 'Route missing files to the index entry.', visible: item => item.workflow === 'static-site'},
-      {id: 'tls', label: 'Enable HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Emit explicit certificate references; Forge does not inspect the files.'},
-      {id: 'certificatePath', label: 'Certificate-chain path', type: 'text', group: 'TLS & protocol', description: 'Absolute PEM path to reference; existence and permissions are not checked.', visible: item => item.tls === true},
-      {id: 'privateKeyPath', label: 'Private-key path', type: 'text', group: 'TLS & protocol', description: 'Distinct absolute PEM path to reference; the file is not inspected.', visible: item => item.tls === true},
-      {id: 'redirectHttp', label: 'Redirect HTTP to HTTPS', type: 'checkbox', group: 'TLS & protocol', description: 'Create a separate port 80 redirect server.', visible: item => item.tls === true},
-      {id: 'websockets', label: 'Enable WebSocket support', type: 'checkbox', group: 'TLS & protocol', description: 'Add the trusted HTTP upgrade map and route headers.', visible: item => item.workflow === 'reverse-proxy'},
-      {id: 'requestLimit', label: 'Enable per-IP request limiting', type: 'checkbox', group: 'Traffic limiting', description: 'Use Nginx leaky-bucket request limiting keyed only by $binary_remote_addr.'},
-      {id: 'connectionLimit', label: 'Enable per-IP connection limiting', type: 'checkbox', group: 'Traffic limiting', description: 'Limit Nginx-tracked concurrent request processing keyed only by $binary_remote_addr.'},
-      {id: 'policyId', label: 'Traffic policy ID', type: 'text', group: 'Traffic limiting', description: 'Stable lowercase identity for engine-owned shared zones.', visible: item => item.requestLimit === true || item.connectionLimit === true},
-      {id: 'requestRate', label: 'Requests per interval', type: 'number', group: 'Request limit', description: 'Integer request rate from 1 to 10,000.', visible: item => item.requestLimit === true},
-      {id: 'requestUnit', label: 'Request interval', type: 'select', group: 'Request limit', description: 'Apply the request rate per second or per minute.', options: [{value: 'second', label: 'Second'}, {value: 'minute', label: 'Minute'}], visible: item => item.requestLimit === true},
-      {id: 'requestBurst', label: 'Request burst', type: 'number', group: 'Request limit', description: 'Queued burst allowance from 0 to 10,000.', visible: item => item.requestLimit === true},
-      {id: 'requestNoDelay', label: 'Reject burst overflow without delay', type: 'checkbox', group: 'Request limit', description: 'Emit nodelay for accepted burst requests.', visible: item => item.requestLimit === true},
-      {id: 'requestZoneMb', label: 'Request zone size (MiB)', type: 'number', group: 'Request limit', description: 'Shared-memory zone size from 1 to 32 MiB.', visible: item => item.requestLimit === true},
-      {id: 'requestStatus', label: 'Request rejection status', type: 'select', group: 'Request limit', description: 'Return 429 or 503 when the request limit rejects traffic.', options: [{value: '429', label: '429 Too Many Requests'}, {value: '503', label: '503 Service Unavailable'}], visible: item => item.requestLimit === true},
-      {id: 'connectionCount', label: 'Concurrent requests per IP', type: 'number', group: 'Connection limit', description: 'Concurrent Nginx request-processing limit from 1 to 10,000.', visible: item => item.connectionLimit === true},
-      {id: 'connectionZoneMb', label: 'Connection zone size (MiB)', type: 'number', group: 'Connection limit', description: 'Shared-memory zone size from 1 to 32 MiB.', visible: item => item.connectionLimit === true},
-      {id: 'connectionStatus', label: 'Connection rejection status', type: 'select', group: 'Connection limit', description: 'Return 429 or 503 when the connection limit rejects traffic.', options: [{value: '429', label: '429 Too Many Requests'}, {value: '503', label: '503 Service Unavailable'}], visible: item => item.connectionLimit === true},
-    ],
+    description: 'Compose one or more proxy and static sites from Forge’s typed capability engine, then inspect every required artifact.',
+    fields: [],
   },
   compose: {
     label: 'Docker Compose', eyebrow: 'DOCKER COMPOSE / SERVICE', title: 'Docker Compose service',
@@ -111,6 +86,9 @@ const definitions: Record<GeneratorId, GeneratorDefinition> = {
 
 let selected: GeneratorId = 'nginx';
 const values: Record<GeneratorId, Record<string, FieldValue>> = structuredClone(defaults);
+const nginxStudio = createDefaultNginxStudioState();
+let nginxCollectionSequence = 10;
+let nginxDiagnosticTargets: ReadonlyMap<string, string> = new Map();
 const staleResults: Record<GeneratorId, boolean> = {nginx: false, compose: false, systemd: false};
 let currentResult: UiResult | null = null;
 let selectedArtifactId = '';
@@ -148,7 +126,7 @@ function renderLanding(): void {
       </section>
       <section id="generators" class="generator-section" aria-labelledby="generator-title">
         <div class="section-intro"><p class="overline">SUPPORTED GENERATORS</p><h2 id="generator-title">Choose a configuration workflow</h2><p>Each generator uses strict typed input and keeps native validation status honest.</p></div>
-        <div class="generator-cards">${generatorIds.map(id => `<a class="generator-card" href="/generators/${id}" data-route><span class="card-icon" aria-hidden="true">${icon(id)}</span><span class="card-status">Available</span><h3>${definitions[id].label}</h3><p>${id === 'nginx' ? 'Reverse proxy, HTTPS, WebSocket, static site, and SPA workflows.' : id === 'compose' ? 'A secure loopback-bound single-service Compose file.' : 'A hardened service unit for a Linux application.'}</p><span class="card-link">Open generator <span aria-hidden="true">→</span></span></a>`).join('')}</div>
+        <div class="generator-cards">${generatorIds.map(id => `<a class="generator-card" href="/generators/${id}" data-route><span class="card-icon" aria-hidden="true">${icon(id)}</span><span class="card-status">Available</span><h3>${definitions[id].label}</h3><p>${id === 'nginx' ? 'Multi-site proxy, routing, upstreams, logging, limiting, static site, and SPA workflows.' : id === 'compose' ? 'A secure loopback-bound single-service Compose file.' : 'A hardened service unit for a Linux application.'}</p><span class="card-link">Open generator <span aria-hidden="true">→</span></span></a>`).join('')}</div>
       </section>
       <section class="cli-callout" aria-labelledby="cli-title"><div><p class="overline">FORGE CLI</p><h2 id="cli-title">Command-line workflow</h2><p>A Forge CLI is planned, but it is not part of the current browser release scope.</p></div><span class="coming-soon">Coming later</span></section>
     </main><footer class="site-footer"><span>Forge · local-first configuration studio</span><span>Review and natively validate every output before use.</span></footer>`;
@@ -171,10 +149,86 @@ function fieldsMarkup(definition: GeneratorDefinition, fieldValues: Readonly<Rec
   return groups.map((group, index) => `<fieldset><legend><span>${String(index + 1).padStart(2, '0')}</span>${group}</legend><div class="field-grid">${visible.filter(field => field.group === group).map(field => fieldMarkup(field, fieldValues)).join('')}</div></fieldset>`).join('');
 }
 
+function nginxControlAttributes(scope: 'root' | 'site' | 'route' | 'backend', key: string, field: string): string {
+  return `data-nginx-control data-nginx-scope="${scope}" data-nginx-key="${escapeHtml(key)}" data-nginx-field="${field}"`;
+}
+
+function nginxInput(scope: 'root' | 'site' | 'route' | 'backend', key: string, field: string, label: string, value: string, description: string, type: 'text' | 'number' = 'text'): string {
+  const id = nginxControlId(key, field);
+  return `<div class="field" data-field-wrap="${id}"><label for="${id}">${label}</label><input id="${id}" type="${type}" value="${escapeHtml(value)}" ${nginxControlAttributes(scope, key, field)} aria-describedby="${id}-help ${id}-error"><small id="${id}-help">${description}</small><p class="field-error" id="${id}-error"></p></div>`;
+}
+
+function nginxSelect(scope: 'root' | 'site' | 'route' | 'backend', key: string, field: string, label: string, value: string, description: string, options: readonly FieldOption[]): string {
+  const id = nginxControlId(key, field);
+  return `<div class="field" data-field-wrap="${id}"><label for="${id}">${label}</label><select id="${id}" ${nginxControlAttributes(scope, key, field)} aria-describedby="${id}-help ${id}-error">${options.map(option => `<option value="${escapeHtml(option.value)}"${option.value === value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select><small id="${id}-help">${description}</small><p class="field-error" id="${id}-error"></p></div>`;
+}
+
+function nginxCheckbox(scope: 'site' | 'route' | 'backend', key: string, field: string, label: string, checked: boolean, description: string): string {
+  const id = nginxControlId(key, field);
+  return `<div class="field field-checkbox" data-field-wrap="${id}"><label for="${id}"><input id="${id}" type="checkbox" ${nginxControlAttributes(scope, key, field)}${checked ? ' checked' : ''}><span><strong>${label}</strong><small>${description}</small></span></label><p class="field-error" id="${id}-error"></p></div>`;
+}
+
+function nginxRouteMarkup(site: NginxStudioSite, route: NginxStudioRoute, index: number): string {
+  return `<article class="collection-item" data-route-key="${escapeHtml(route.key)}"><header><div><span class="item-index">Route ${index + 1}</span><strong>${escapeHtml(route.prefix)}</strong></div><button type="button" class="button-danger" data-nginx-action="remove-route" data-site-key="${escapeHtml(site.key)}" data-item-key="${escapeHtml(route.key)}" aria-label="Remove route ${index + 1}">Remove</button></header><div class="field-grid">
+    ${nginxInput('route', route.key, 'prefix', 'Location prefix', route.prefix, 'Literal location prefix such as /api/.')}
+    ${nginxSelect('route', route.key, 'forwarding', 'URI forwarding', route.forwarding, 'Preserve or strip the matched prefix.', [{value: 'preserve-prefix', label: 'Preserve prefix'}, {value: 'strip-prefix', label: 'Strip prefix'}])}
+    ${nginxInput('route', route.key, 'targetHost', 'Target host', route.targetHost, 'Literal hostname or IP for this route.')}
+    ${nginxInput('route', route.key, 'targetPort', 'Target port', route.targetPort, 'TCP port from 1 to 65535.', 'number')}
+    ${nginxCheckbox('route', route.key, 'websocket', 'Enable WebSocket upgrade', route.websocket, 'Apply the trusted upgrade map to this exact route.')}
+  </div></article>`;
+}
+
+function nginxBackendMarkup(site: NginxStudioSite, backend: NginxStudioBackend, index: number): string {
+  const canRemove = site.backends.length > 2;
+  return `<article class="collection-item" data-backend-key="${escapeHtml(backend.key)}"><header><div><span class="item-index">Backend ${index + 1}</span><strong>${escapeHtml(backend.host)}:${escapeHtml(backend.port)}</strong></div><button type="button" class="button-danger" data-nginx-action="remove-backend" data-site-key="${escapeHtml(site.key)}" data-item-key="${escapeHtml(backend.key)}"${canRemove ? '' : ' disabled'} aria-label="Remove backend ${index + 1}">Remove</button></header><div class="field-grid compact-grid">
+    ${nginxInput('backend', backend.key, 'host', 'Backend host', backend.host, 'Literal hostname or IP.')}
+    ${nginxInput('backend', backend.key, 'port', 'Port', backend.port, 'TCP port from 1 to 65535.', 'number')}
+    ${nginxInput('backend', backend.key, 'weight', 'Weight', backend.weight, 'Weighted round-robin or least-connections weight, 1–100.', 'number')}
+    ${nginxInput('backend', backend.key, 'maxFails', 'Maximum failures', backend.maxFails, 'Passive failure threshold, 0–10.', 'number')}
+    ${nginxInput('backend', backend.key, 'failTimeoutSeconds', 'Failure timeout (seconds)', backend.failTimeoutSeconds, 'Passive failure window, 1–300 seconds.', 'number')}
+    ${nginxCheckbox('backend', backend.key, 'backup', 'Backup server', backend.backup, 'Use only when primary servers are unavailable.')}
+    ${nginxCheckbox('backend', backend.key, 'down', 'Mark server down', backend.down, 'Keep this backend disabled in the generated group.')}
+  </div></article>`;
+}
+
+function nginxAdvancedSiteMarkup(site: NginxStudioSite): string {
+  const upstream = site.workflow === 'reverse-proxy' ? `<fieldset><legend>Upstream group</legend><div class="field-grid">
+    ${nginxCheckbox('site', site.key, 'useUpstream', 'Use a load-balanced upstream group', site.useUpstream, 'Point the root proxy at two to sixteen typed backends.')}
+    ${site.useUpstream ? `${nginxInput('site', site.key, 'upstreamId', 'Upstream ID', site.upstreamId, 'Stable lowercase identity for the group.')}${nginxSelect('site', site.key, 'upstreamStrategy', 'Balancing strategy', site.upstreamStrategy, 'Weighted round-robin or least-connections.', [{value: 'round-robin', label: 'Weighted round-robin'}, {value: 'least-connections', label: 'Least connections'}])}` : ''}
+  </div>${site.useUpstream ? `<div class="collection-toolbar"><div><strong>Backend servers</strong><span>${site.backends.length} of ${NGINX_STUDIO_LIMITS.backendsPerUpstream}</span></div><button type="button" data-nginx-action="add-backend" data-site-key="${escapeHtml(site.key)}"${site.backends.length >= NGINX_STUDIO_LIMITS.backendsPerUpstream ? ' disabled' : ''}>+ Add backend</button></div><div class="collection-list">${site.backends.map((backend, index) => nginxBackendMarkup(site, backend, index)).join('')}</div><p class="field-error" id="${nginxControlId(site.key, 'backends')}-error"></p>` : ''}</fieldset>` : '';
+
+  const routes = site.workflow === 'reverse-proxy' ? `<fieldset><legend>Routes & WebSocket</legend>${nginxCheckbox('site', site.key, 'rootWebsocket', 'Enable WebSocket support on /', site.rootWebsocket, 'Apply the trusted upgrade map to the root proxy location.')}<div class="collection-toolbar"><div><strong>Additional locations</strong><span>${site.routes.length} of ${NGINX_STUDIO_LIMITS.routesPerSite}</span></div><button type="button" data-nginx-action="add-route" data-site-key="${escapeHtml(site.key)}"${site.routes.length >= NGINX_STUDIO_LIMITS.routesPerSite ? ' disabled' : ''}>+ Add route</button></div><div class="collection-list">${site.routes.map((route, index) => nginxRouteMarkup(site, route, index)).join('')}</div><p class="field-error" id="${nginxControlId(site.key, 'routes')}-error"></p></fieldset>` : '';
+
+  const logging = `<fieldset><legend>Logging</legend><div class="field-grid">${nginxCheckbox('site', site.key, 'logging', 'Configure site logging', site.logging, 'Emit explicit access and error log policy for this site.')}${site.logging ? `${nginxSelect('site', site.key, 'accessLog', 'Access-log preset', site.accessLog, 'Combined, the fixed Forge JSON format, or off.', [{value: 'combined', label: 'Combined'}, {value: 'forge-json', label: 'Forge JSON'}, {value: 'off', label: 'Off'}])}${site.accessLog === 'off' ? '' : nginxInput('site', site.key, 'accessLogPath', 'Access-log path', site.accessLogPath, 'Absolute destination; rotation remains external.')}${nginxInput('site', site.key, 'errorLogPath', 'Error-log path', site.errorLogPath, 'Absolute per-site error log destination.')}${nginxSelect('site', site.key, 'errorLogLevel', 'Error severity', site.errorLogLevel, 'Minimum emitted severity.', ['info', 'notice', 'warn', 'error', 'crit', 'alert', 'emerg'].map(value => ({value, label: value})))}` : ''}</div></fieldset>`;
+
+  const traffic = `<fieldset><legend>Traffic limiting</legend><div class="field-grid">${nginxCheckbox('site', site.key, 'requestLimit', 'Enable per-IP request limiting', site.requestLimit, 'Leaky-bucket limit keyed only by $binary_remote_addr.')}${nginxCheckbox('site', site.key, 'connectionLimit', 'Enable per-IP connection limiting', site.connectionLimit, 'Bound concurrent Nginx request processing per client IP.')}${site.requestLimit || site.connectionLimit ? nginxInput('site', site.key, 'policyId', 'Traffic policy ID', site.policyId, 'Stable lowercase identity for engine-owned zones.') : ''}${site.requestLimit ? `${nginxInput('site', site.key, 'requestRate', 'Requests per interval', site.requestRate, 'Integer from 1 to 10,000.', 'number')}${nginxSelect('site', site.key, 'requestUnit', 'Request interval', site.requestUnit, 'Per second or minute.', [{value: 'second', label: 'Second'}, {value: 'minute', label: 'Minute'}])}${nginxInput('site', site.key, 'requestBurst', 'Burst', site.requestBurst, 'Queued burst allowance from 0 to 10,000.', 'number')}${nginxCheckbox('site', site.key, 'requestNoDelay', 'Use nodelay', site.requestNoDelay, 'Requires a positive burst.')}${nginxInput('site', site.key, 'requestZoneMb', 'Request zone (MiB)', site.requestZoneMb, 'Shared memory from 1 to 32 MiB.', 'number')}${nginxSelect('site', site.key, 'requestStatus', 'Request rejection status', site.requestStatus, '429 or 503.', [{value: '429', label: '429'}, {value: '503', label: '503'}])}` : ''}${site.connectionLimit ? `${nginxInput('site', site.key, 'connectionCount', 'Concurrent requests per IP', site.connectionCount, 'Integer from 1 to 10,000.', 'number')}${nginxInput('site', site.key, 'connectionZoneMb', 'Connection zone (MiB)', site.connectionZoneMb, 'Shared memory from 1 to 32 MiB.', 'number')}${nginxSelect('site', site.key, 'connectionStatus', 'Connection rejection status', site.connectionStatus, '429 or 503.', [{value: '429', label: '429'}, {value: '503', label: '503'}])}` : ''}</div></fieldset>`;
+  return `${upstream}${routes}${logging}${traffic}`;
+}
+
+function nginxSiteMarkup(site: NginxStudioSite, index: number): string {
+  const proxyFields = site.workflow === 'reverse-proxy' && !site.useUpstream ? `${nginxInput('site', site.key, 'targetHost', 'Upstream host', site.targetHost, 'Literal hostname or IP reachable from Nginx.')}${nginxInput('site', site.key, 'targetPort', 'Upstream port', site.targetPort, 'TCP port from 1 to 65535.', 'number')}` : '';
+  const staticFields = site.workflow === 'static-site' ? `${nginxInput('site', site.key, 'documentRoot', 'Document root', site.documentRoot, 'Absolute directory containing the deployed site.')}${nginxInput('site', site.key, 'indexFile', 'Index file', site.indexFile, 'Safe entry filename relative to the document root.')}${nginxCheckbox('site', site.key, 'spaFallback', 'Single Page Application fallback', site.spaFallback, 'Route missing files to the index entry.')}` : '';
+  const tlsFields = `${nginxCheckbox('site', site.key, 'tls', 'Enable HTTPS', site.tls, 'Reference explicit certificate files; Forge does not inspect them.')}${site.tls ? `${nginxInput('site', site.key, 'certificatePath', 'Certificate-chain path', site.certificatePath, 'Absolute PEM path.')}${nginxInput('site', site.key, 'privateKeyPath', 'Private-key path', site.privateKeyPath, 'Distinct protected PEM path.')}${nginxCheckbox('site', site.key, 'redirectHttp', 'Redirect HTTP to HTTPS', site.redirectHttp, 'Create a separate port 80 redirect server.')}` : ''}`;
+  return `<section class="site-card" data-site-key="${escapeHtml(site.key)}" aria-labelledby="${site.key}-title"><header class="site-card-header"><div><span class="item-index">Site ${index + 1}</span><h2 id="${site.key}-title">${escapeHtml(site.domain)}</h2></div><button type="button" class="button-danger" data-nginx-action="remove-site" data-site-key="${escapeHtml(site.key)}"${nginxStudio.sites.length === 1 ? ' disabled' : ''} aria-label="Remove site ${index + 1}">Remove site</button></header><div id="${site.key}-message" class="site-message" role="alert" hidden></div>
+    <fieldset><legend>Site identity</legend><div class="field-grid">${nginxInput('site', site.key, 'id', 'Site ID', site.id, 'Stable lowercase identity for diagnostics and shared resources.')}${nginxSelect('site', site.key, 'workflow', 'Workflow', site.workflow, 'Choose a reverse proxy or filesystem-backed site.', [{value: 'reverse-proxy', label: 'Reverse proxy'}, {value: 'static-site', label: 'Static website'}])}${nginxInput('site', site.key, 'domain', 'Domain name', site.domain, 'Exact fully qualified server name.')}${proxyFields}${staticFields}</div></fieldset>
+    <fieldset><legend>TLS & protocol</legend><div class="field-grid">${tlsFields}</div></fieldset>
+    ${nginxStudio.mode === 'advanced' ? nginxAdvancedSiteMarkup(site) : ''}
+  </section>`;
+}
+
+function nginxFieldsMarkup(): string {
+  const advancedSummary = nginxStudio.mode === 'basic' && nginxStudio.sites.some(site => site.routes.length > 0 || site.useUpstream || site.logging || site.requestLimit || site.connectionLimit)
+    ? '<p class="mode-warning">Advanced settings remain active in generation. Switch to Advanced to review or edit them.</p>' : '';
+  return `<fieldset><legend><span>01</span>Studio mode</legend><div class="field-grid">
+    ${nginxSelect('root', 'studio', 'mode', 'Configuration mode', nginxStudio.mode, 'Basic covers common site ownership and TLS. Advanced exposes collections and operational controls.', [{value: 'basic', label: 'Basic'}, {value: 'advanced', label: 'Advanced'}])}
+    ${nginxSelect('root', 'studio', 'profile', 'Output profile', nginxStudio.profile, 'Complete nginx.conf or a site fragment with supporting artifacts.', [{value: 'full-config', label: 'Complete nginx.conf'}, {value: 'site-fragment', label: 'Site fragment'}])}
+  </div>${advancedSummary}</fieldset><div class="collection-toolbar site-toolbar"><div><strong>Configured sites</strong><span>${nginxStudio.sites.length} of ${NGINX_STUDIO_LIMITS.sites}</span></div>${nginxStudio.mode === 'advanced' ? `<button type="button" data-nginx-action="add-site"${nginxStudio.sites.length >= NGINX_STUDIO_LIMITS.sites ? ' disabled' : ''}>+ Add site</button>` : '<span class="mode-badge">Advanced mode enables multi-site editing</span>'}</div><div class="site-list">${nginxStudio.sites.map((site, index) => nginxSiteMarkup(site, index)).join('')}</div>`;
+}
+
 function nginxCompatibilityMarkup(): string {
   return `<section class="compatibility-note" aria-labelledby="compatibility-title">
     <h2 id="compatibility-title">Assumed Nginx compatibility inputs</h2>
-    <p>Forge composes for an assumed Nginx <strong>${NGINX_TARGET_VERSION}</strong> target with these declared modules: <code>${NGINX_TARGET_MODULES.join(', ')}</code>.</p>
+    <p>Forge composes for an assumed Nginx <strong>${NGINX_STUDIO_TARGET_VERSION}</strong> target with these declared modules: <code>${NGINX_STUDIO_TARGET_MODULES.join(', ')}</code>.</p>
     <p>These are generator inputs, not properties discovered from your server. Forge has not inspected installed modules, certificate files, paths, permissions, or service reachability.</p>
     <dl><div><dt>Input</dt><dd>Trusted field and capability schemas.</dd></div><div><dt>Static</dt><dd>Forge structural checks over generated artifacts.</dd></div><div><dt>Native</dt><dd><code>nginx -t</code> was not run for your generated files.</dd></div><div><dt>Target host</dt><dd>Your server and filesystem were not inspected.</dd></div></dl>
   </section>`;
@@ -188,7 +242,7 @@ function renderWorkspace(): void {
       <header class="workspace-heading"><div><p class="overline">${definition.eyebrow}</p><h1>${definition.title}</h1><p>${definition.description}</p></div><a class="back-link" href="/" data-route>All generators</a></header>
       <section class="workspace" aria-label="Generator workspace">
         <div class="panel configuration-panel"><div class="panel-label"><span>01</span> / CONFIGURATION</div>
-          <form id="generator-form" novalidate>${fieldsMarkup(definition, values[selected])}${selected === 'nginx' ? nginxCompatibilityMarkup() : ''}<div id="form-message" class="form-message" role="alert" hidden></div><button class="button button-primary generate-button" type="submit">Generate configuration <span aria-hidden="true">→</span></button><p class="form-note">Inputs remain local. Forge does not connect to servers or run deployment commands.</p></form>
+          <form id="generator-form" novalidate>${selected === 'nginx' ? nginxFieldsMarkup() : fieldsMarkup(definition, values[selected])}${selected === 'nginx' ? nginxCompatibilityMarkup() : ''}<div id="form-message" class="form-message" role="alert" hidden></div><button class="button button-primary generate-button" type="submit">Generate configuration <span aria-hidden="true">→</span></button><p class="form-note">Inputs remain local. Forge does not connect to servers or run deployment commands.</p></form>
         </div>
         <aside class="panel preview-panel" aria-label="Generated file preview"><div class="panel-label"><span>02</span> / FILE PREVIEW</div><div id="artifact-tabs" class="artifact-tabs" aria-label="Generated artifacts"></div><div class="preview-heading"><div><span class="file-icon" aria-hidden="true">▤</span><strong id="filename">No file generated</strong></div><span id="artifact-role" class="role-badge">Waiting</span></div><pre id="preview" tabindex="0" aria-label="Configuration preview"><code id="output">Complete the form and generate a configuration.</code></pre><div id="preview-message" class="preview-message" aria-live="polite"></div><div class="preview-actions"><button id="copy" type="button" disabled>⧉ Copy</button><button id="download" type="button" disabled>↓ Download</button><button id="download-all" type="button" disabled hidden>↓ ZIP</button><button id="expand" type="button" disabled>⛶ Expand</button></div><section class="details" aria-labelledby="prerequisites-title"><h2 id="prerequisites-title">Prerequisites & cautions</h2><div id="prerequisites"><p>Generate a configuration to see target-host prerequisites.</p></div></section></aside>
       </section>
@@ -200,6 +254,7 @@ function renderWorkspace(): void {
 }
 
 function valuesFingerprint(id: GeneratorId): string {
+  if (id === 'nginx') return JSON.stringify(nginxStudio);
   return JSON.stringify(definitions[id].fields.map(field => [field.id, values[id][field.id]]));
 }
 
@@ -207,12 +262,60 @@ function captureValues(): boolean {
   const form = document.getElementById('generator-form');
   if (!(form instanceof HTMLFormElement)) return false;
   const before = valuesFingerprint(selected);
+  if (selected === 'nginx') {
+    form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-nginx-control]').forEach(control => {
+      const scope = control.dataset.nginxScope;
+      const key = control.dataset.nginxKey ?? '';
+      const field = control.dataset.nginxField;
+      if (field === undefined) return;
+      const value: string | boolean = control instanceof HTMLInputElement && control.type === 'checkbox' ? control.checked : control.value;
+      if (scope === 'root') Object.assign(nginxStudio, {[field]: value});
+      else if (scope === 'site') {
+        const site = nginxStudio.sites.find(item => item.key === key);
+        if (site !== undefined) Object.assign(site, {[field]: value});
+      } else if (scope === 'route') {
+        const route = nginxStudio.sites.flatMap(site => site.routes).find(item => item.key === key);
+        if (route !== undefined) Object.assign(route, {[field]: value});
+      } else if (scope === 'backend') {
+        const backend = nginxStudio.sites.flatMap(site => site.backends).find(item => item.key === key);
+        if (backend !== undefined) Object.assign(backend, {[field]: value});
+      }
+    });
+    return before !== valuesFingerprint(selected);
+  }
   for (const field of definitions[selected].fields) {
     const control = form.elements.namedItem(field.id);
     if (control instanceof HTMLInputElement && field.type === 'checkbox') values[selected][field.id] = control.checked;
     else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) values[selected][field.id] = control.value;
   }
   return before !== valuesFingerprint(selected);
+}
+
+function nginxSite(key: string): NginxStudioSite | undefined { return nginxStudio.sites.find(site => site.key === key); }
+function rerenderNginxWorkspace(focusId?: string): void {
+  if (currentResult !== null) { currentResult = null; selectedArtifactId = ''; staleResults.nginx = true; }
+  renderWorkspace();
+  if (focusId !== undefined) document.getElementById(focusId)?.focus();
+}
+function mutateNginxCollection(action: string, siteKey: string, itemKey: string): void {
+  captureValues();
+  const site = nginxSite(siteKey);
+  let focusId: string | undefined;
+  if (action === 'add-site' && nginxStudio.sites.length < NGINX_STUDIO_LIMITS.sites) {
+    const created = createNginxSite(`site-${++nginxCollectionSequence}`, nginxStudio.sites.length + 1);
+    nginxStudio.sites.push(created); focusId = nginxControlId(created.key, 'id');
+  } else if (action === 'remove-site' && nginxStudio.sites.length > 1) {
+    nginxStudio.sites = nginxStudio.sites.filter(item => item.key !== siteKey); focusId = nginxStudio.sites[0] === undefined ? undefined : nginxControlId(nginxStudio.sites[0].key, 'id');
+  } else if (action === 'add-route' && site !== undefined && site.routes.length < NGINX_STUDIO_LIMITS.routesPerSite) {
+    const created = createNginxRoute(`${site.key}-route-${++nginxCollectionSequence}`); site.routes.push(created); focusId = nginxControlId(created.key, 'prefix');
+  } else if (action === 'remove-route' && site !== undefined) {
+    site.routes = site.routes.filter(item => item.key !== itemKey); focusId = nginxControlId(site.key, 'rootWebsocket');
+  } else if (action === 'add-backend' && site !== undefined && site.backends.length < NGINX_STUDIO_LIMITS.backendsPerUpstream) {
+    const created = createNginxBackend(`${site.key}-backend-${++nginxCollectionSequence}`, site.backends.length + 1); site.backends.push(created); focusId = nginxControlId(created.key, 'host');
+  } else if (action === 'remove-backend' && site !== undefined && site.backends.length > 2) {
+    site.backends = site.backends.filter(item => item.key !== itemKey); focusId = nginxControlId(site.backends[0]?.key ?? site.key, site.backends[0] === undefined ? 'useUpstream' : 'host');
+  }
+  rerenderNginxWorkspace(focusId);
 }
 function navigate(url: string): void {
   const next = new URL(url, window.location.href); window.history.pushState({}, '', next.pathname); renderRoute();
@@ -232,7 +335,15 @@ function bindWorkspace(): void {
   form.addEventListener('input', event => {
     const changed = captureValues(); const target = event.target; if (target instanceof HTMLElement) clearFieldError(target.id);
     if (changed && currentResult !== null) invalidateGeneratedResult();
-    if (target instanceof HTMLSelectElement && target.id === 'workflow' || target instanceof HTMLInputElement && ['tls', 'requestLimit', 'connectionLimit'].includes(target.id)) { renderWorkspace(); document.getElementById(target.id)?.focus(); }
+    const nginxVisibilityControl = target instanceof HTMLInputElement || target instanceof HTMLSelectElement ? target : undefined;
+    const nginxVisibilityField = nginxVisibilityControl?.dataset.nginxField;
+    const nginxVisibilityId = nginxVisibilityControl?.id;
+    if (selected === 'nginx' && nginxVisibilityField !== undefined && nginxVisibilityId !== undefined && ['mode', 'workflow', 'useUpstream', 'tls', 'logging', 'accessLog', 'requestLimit', 'connectionLimit'].includes(nginxVisibilityField)) rerenderNginxWorkspace(nginxVisibilityId);
+  });
+  form.addEventListener('click', event => {
+    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-nginx-action]') : null;
+    if (button === null) return;
+    mutateNginxCollection(button.dataset.nginxAction ?? '', button.dataset.siteKey ?? '', button.dataset.itemKey ?? '');
   });
   form.addEventListener('submit', event => { event.preventDefault(); generate(); });
   document.getElementById('copy')?.addEventListener('click', () => void copySelected());
@@ -243,33 +354,16 @@ function bindWorkspace(): void {
 }
 
 function numeric(value: FieldValue): number { return typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN; }
-function nginxRequest(fieldValues: Readonly<Record<string, FieldValue>>): unknown {
-  const capabilities: CapabilitySelection[] = [];
-  if (fieldValues.workflow === 'static-site') capabilities.push({id: 'static-site', input: {domain: fieldValues.domain, documentRoot: fieldValues.documentRoot, indexFile: fieldValues.indexFile, spaFallback: fieldValues.spaFallback}});
-  else {
-    capabilities.push({id: 'reverse-proxy', input: {domain: fieldValues.domain, targetHost: fieldValues.targetHost, targetPort: numeric(fieldValues.targetPort ?? '')}});
-    if (fieldValues.websockets === true) capabilities.push({id: 'websocket', input: {routes: ['/']}});
-  }
-  if (fieldValues.tls === true) capabilities.push({id: 'tls', input: {certificatePath: fieldValues.certificatePath, privateKeyPath: fieldValues.privateKeyPath, redirectHttp: fieldValues.redirectHttp}});
-  if (fieldValues.requestLimit === true || fieldValues.connectionLimit === true) {
-    const trafficInput: Record<string, unknown> = {policyId: fieldValues.policyId};
-    if (fieldValues.requestLimit === true) trafficInput.requestLimit = {
-      rate: numeric(fieldValues.requestRate ?? ''), unit: fieldValues.requestUnit, burst: numeric(fieldValues.requestBurst ?? ''), nodelay: fieldValues.requestNoDelay,
-      zoneSizeMb: numeric(fieldValues.requestZoneMb ?? ''), statusCode: numeric(fieldValues.requestStatus ?? ''),
-    };
-    if (fieldValues.connectionLimit === true) trafficInput.connectionLimit = {
-      connections: numeric(fieldValues.connectionCount ?? ''), zoneSizeMb: numeric(fieldValues.connectionZoneMb ?? ''), statusCode: numeric(fieldValues.connectionStatus ?? ''),
-    };
-    capabilities.push({id: 'traffic-limiting', input: trafficInput});
-  }
-  return {profile: String(fieldValues.profile), target: {version: NGINX_TARGET_VERSION, modules: NGINX_TARGET_MODULES}, capabilities};
-}
 function legacyInput(id: Exclude<GeneratorId, 'nginx'>, fieldValues: Readonly<Record<string, FieldValue>>): Record<string, FieldValue | number> {
   return id === 'compose' ? {...fieldValues, hostPort: numeric(fieldValues.hostPort ?? ''), containerPort: numeric(fieldValues.containerPort ?? '')} : {...fieldValues};
 }
 function generate(): void {
   captureValues(); clearErrors();
-  currentResult = selected === 'nginx' ? composeNginxCapabilities(nginxRequest(values.nginx)) : outcomes[selected](legacyInput(selected, values[selected]));
+  if (selected === 'nginx') {
+    const built = buildNginxStudioRequest(nginxStudio);
+    nginxDiagnosticTargets = built.diagnosticTargets;
+    currentResult = composeNginxSites(built.request);
+  } else currentResult = outcomes[selected](legacyInput(selected, values[selected]));
   staleResults[selected] = false;
   selectedArtifactId = currentResult.ok ? currentResult.artifacts[0]?.id ?? '' : ''; renderResult();
 }
@@ -312,20 +406,32 @@ function renderValidation(validation: ValidationSummary): void {
   host.replaceChildren(...records.map(([label, record]) => { const span = document.createElement('span'); span.className = `validation-${record.status}`; span.textContent = statusLabel(label, record); span.title = record.diagnostics.map(item => item.message).join(' ') || `${label}: ${record.status}`; return span; }));
 }
 function diagnosticField(diagnostic: Diagnostic): string | undefined {
+  if (selected === 'nginx') return diagnosticTarget(diagnostic.path, nginxDiagnosticTargets);
   const path = diagnostic.path ?? ''; return definitions[selected].fields.map(field => field.id).find(id => path.endsWith(`.${id}`) || path === id);
 }
 function showDiagnostics(diagnostics: readonly Diagnostic[]): void {
   const general: string[] = [];
   for (const diagnostic of diagnostics.filter(item => item.severity === 'error')) {
     const field = diagnosticField(diagnostic);
-    if (field === undefined) general.push(diagnostic.message);
+    const site = selected === 'nginx' && diagnostic.siteId !== undefined ? nginxStudio.sites.find(item => item.id === diagnostic.siteId) : undefined;
+    if (field === undefined && site !== undefined) {
+      const message = document.getElementById(`${site.key}-message`);
+      if (message instanceof HTMLElement) { message.hidden = false; message.textContent = diagnostic.message; }
+    }
+    else if (field === undefined) general.push(diagnostic.message);
     else { setText(`${field}-error`, diagnostic.message); document.getElementById(field)?.setAttribute('aria-invalid', 'true'); document.querySelector(`[data-field-wrap="${field}"]`)?.classList.add('has-error'); }
   }
   const message = document.getElementById('form-message'); if (message instanceof HTMLElement) { message.hidden = general.length === 0; message.textContent = general.join(' '); }
   document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
 }
 function clearFieldError(id: string): void { document.getElementById(id)?.removeAttribute('aria-invalid'); document.querySelector(`[data-field-wrap="${id}"]`)?.classList.remove('has-error'); setText(`${id}-error`, ''); }
-function clearErrors(): void { definitions[selected].fields.forEach(field => clearFieldError(field.id)); const message = document.getElementById('form-message'); if (message instanceof HTMLElement) { message.hidden = true; message.textContent = ''; } }
+function clearErrors(): void {
+  if (selected === 'nginx') {
+    document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-nginx-control]').forEach(control => clearFieldError(control.id));
+    nginxStudio.sites.forEach(site => { const message = document.getElementById(`${site.key}-message`); if (message instanceof HTMLElement) { message.hidden = true; message.textContent = ''; } });
+  } else definitions[selected].fields.forEach(field => clearFieldError(field.id));
+  const message = document.getElementById('form-message'); if (message instanceof HTMLElement) { message.hidden = true; message.textContent = ''; }
+}
 function renderPrerequisites(items: readonly {readonly description: string; readonly path?: string}[]): void {
   const host = document.getElementById('prerequisites'); if (host === null) return; host.replaceChildren();
   if (items.length === 0) { const paragraph = document.createElement('p'); paragraph.textContent = 'No artifacts were produced, so prerequisites are unavailable.'; host.append(paragraph); return; }
