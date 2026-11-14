@@ -1,4 +1,4 @@
-# Forge v0.1 visual review evidence
+# Forge Studio visual review evidence
 
 Reference: Figma file `utXHuHFSoeqTK22SEeQNjY`, approved A4 workspace node `9:2`.
 

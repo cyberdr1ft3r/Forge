@@ -1,4 +1,4 @@
-# Forge v0.1 UI and Nginx integration plan
+# Forge UI and Nginx integration plan
 
 Prepared from `main` at `cb4f4bd` before implementation. The approved A4 Figma node is `9:2` in file `utXHuHFSoeqTK22SEeQNjY`. PR #23 is open and unmerged, so traffic limiting is intentionally excluded.
 

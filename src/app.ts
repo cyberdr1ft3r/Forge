@@ -136,8 +136,8 @@ function renderLanding(): void {
         <div class="section-intro"><p class="overline">SUPPORTED GENERATORS</p><h2 id="generator-title">Choose a configuration workflow</h2><p>Each generator uses strict typed input and keeps native validation status honest.</p></div>
         <div class="generator-cards">${generatorIds.map(id => `<a class="generator-card" href="/generators/${id}" data-route><span class="card-icon" aria-hidden="true">${icon(id)}</span><span class="card-status">Available</span><h3>${definitions[id].label}</h3><p>${id === 'nginx' ? 'Reverse proxy, HTTPS, WebSocket, static site, and SPA workflows.' : id === 'compose' ? 'A secure loopback-bound single-service Compose file.' : 'A hardened service unit for a Linux application.'}</p><span class="card-link">Open generator <span aria-hidden="true">→</span></span></a>`).join('')}</div>
       </section>
-      <section class="cli-callout" aria-labelledby="cli-title"><div><p class="overline">FORGE CLI</p><h2 id="cli-title">Command-line workflow</h2><p>A Forge CLI is planned, but it is not available in v0.1.</p></div><span class="coming-soon">Coming soon</span></section>
-    </main><footer class="site-footer"><span>Forge v0.1 prototype</span><span>Review and natively validate every output before use.</span></footer>`;
+      <section class="cli-callout" aria-labelledby="cli-title"><div><p class="overline">FORGE CLI</p><h2 id="cli-title">Command-line workflow</h2><p>A Forge CLI is planned, but it is not part of the current browser release scope.</p></div><span class="coming-soon">Coming later</span></section>
+    </main><footer class="site-footer"><span>Forge · local-first configuration studio</span><span>Review and natively validate every output before use.</span></footer>`;
   bindRoutes();
 }
 

@@ -1,6 +1,6 @@
 # Forge
 
-Infrastructure configuration generator prototype (v0.1).
+Infrastructure configuration studio under development toward the stable v1.0.0 release.
 
 Generate starter configurations for Nginx, Docker Compose and systemd. Configurations must be reviewed and natively validated before deployment.
 
@@ -18,6 +18,12 @@ Open http://127.0.0.1:4173.
 
 The landing page links to directly addressable workspaces at `/generators/nginx`, `/generators/compose`, and `/generators/systemd`. Nginx uses the typed capability-composition engine for reverse proxy, HTTPS, WebSocket, static website, SPA fallback, and complete/site-fragment output profiles. Docker Compose and systemd continue to use the versioned generator lifecycle.
 
+## Static release packaging
+
+`npm run build:static` creates the allowlisted browser-only site under `release/site` and a SHA-256 content manifest outside the public root. The package contains `index.html`, `styles.css`, and only the compiled JavaScript dependency closure required by `/dist/app.js`; it excludes source, tests, source maps, declarations, repository metadata, documentation, and Node.js tooling.
+
+The development server is for loopback development only. Do not expose the repository root or `server.js` as a public service. See [`docs/STATIC_DEPLOYMENT.md`](docs/STATIC_DEPLOYMENT.md) for the reviewed static Nginx staging, activation, and rollback procedure.
+
 Generator code is TypeScript compiled to `dist/` for the browser. The contract, lifecycle, extension guide, validation states, security boundaries, and migration policy are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Current limitations
@@ -25,7 +31,7 @@ Generator code is TypeScript compiled to `dist/` for the browser. The contract, 
 - In-browser input validation is not a native Nginx, Docker Compose, or systemd validation.
 - Native validators are described as unavailable unless the relevant executable actually ran successfully; Forge does not run them in the browser.
 - Target-host files, permissions, modules, and service readiness are not inspected in the browser.
-- The project is a prototype; review generated files before use.
+- The first public release is gated on the v1.0.0 roadmap; review generated files before use.
 - No server credentials or deployment automation are involved.
 
 Built by cyberdr1ft3r.
