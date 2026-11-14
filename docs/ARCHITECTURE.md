@@ -12,7 +12,7 @@ The current architecture keeps a small shared lifecycle and makes every technolo
 
 ```text
 src/
-  app.ts                    Browser rendering and copy/download interactions only
+  app.ts                    Route-aware browser UI and typed request adapters
   core/
     errors.ts               Typed public errors
     lifecycle.ts            Contract execution and legacy export adapter
@@ -25,8 +25,11 @@ src/
     systemd.ts              systemd definition
     index.ts                Public API, registry, legacy adapters
   nginx-syntax/             Nginx-specific typed AST, trusted registry, validator and serializer
+  nginx-composition/        Capability planner and single-/multi-site composition APIs
+  ui/zip.ts                 Local deterministic multi-artifact ZIP export
 tests/
   generators.test.js        Contract, regression, determinism, and attack tests
+  browser/                  Real-browser navigation, interaction and responsive tests
 dist/                       Generated browser/Node JavaScript; never committed
 ```
 
@@ -53,11 +56,21 @@ Issue #14 Phase 3 adds a CI-only native validation harness and official-image co
 
 The multi-site hardening increment adds the additive `composeNginxSites()` API. It orders bounded site plans deterministically, deduplicates shared HTTP AST resources by semantic identity, rejects ambiguous listener/server-name ownership, and carries site provenance through diagnostics and explanations without changing the legacy single-site path. See [`NGINX_MULTI_SITE_COMPOSITION.md`](NGINX_MULTI_SITE_COMPOSITION.md).
 
+## Browser integration
+
+The browser studio keeps the core generators and Nginx engines independent of DOM concerns. `/generators/nginx` constructs only allow-listed typed capability selections and calls `composeNginxCapabilities()` directly. The current UI surface exposes reverse proxy, TLS/redirect, WebSocket, static-site, SPA, and per-IP request/connection limiting with complete-configuration and site-fragment profiles. It renders the full returned artifact array, including required supporting HTTP-context files, and exports multiple files as a browser-local ZIP. Collection-based logging, routing, upstream, and multi-site editors remain M1 work.
+
+`/generators/compose` and `/generators/systemd` continue to call the registered `tryGenerate` outcomes without changing their manifests, validation, normalization, or generated content. The browser displays the contract validation records rather than inferring success from generated text. Native validation stays `unavailable`, and target-host readiness stays `not-run`, unless a future trusted integration actually performs those checks.
+
+Known application routes are served by the dependency-free development server with an `index.html` fallback. Unknown paths and unsafe traversal still fail instead of receiving the application shell. Configuration output is written to the DOM as text, never interpreted as HTML.
+
 Issue #14 Phase 4A adds one `static-site` capability to the same registry and planning pipeline. A static site can own a validated domain and root location, optionally use an SPA entry fallback, and compose with TLS without a fake upstream. Typed directory, filename, and `try_files` arguments prevent raw filesystem expressions or directive injection. See [`NGINX_STATIC_SITE_PHASE4A.md`](NGINX_STATIC_SITE_PHASE4A.md).
 
 Issue #14 Phase 4B adds a typed `upstream-load-balancing` capability and a mutually exclusive upstream reference to the reverse-proxy contract. Trusted HTTP-level upstream blocks support weighted round robin, weighted least connections, bounded passive failure controls, backup servers, and disabled servers. Equivalent cross-site definitions deduplicate by semantic identity; contradictions fail closed. Existing direct reverse-proxy output is unchanged. See [`NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md`](NGINX_UPSTREAM_LOAD_BALANCING_PHASE4B.md).
 
 Issue #14 Phase 4C adds a typed `logging` capability. It applies explicit access- and error-log policy to each Forge-owned server, supports the built-in `combined` format, explicit `access_log off`, and one fixed namespaced JSON preset. JSON format declarations are shared at HTTP scope and deduplicated semantically. File creation, permissions, rotation, retention, capacity monitoring, worker startup, and deployment remain operator responsibilities. See [`NGINX_LOGGING_PHASE4C.md`](NGINX_LOGGING_PHASE4C.md).
+
+Issue #14 Phase 4D adds a typed `traffic-limiting` capability. It models request-rate limiting and concurrent request/connection limiting as separate optional controls, declares bounded per-client-IP zones at HTTP scope, and applies enforcement only to the owning application server. Zone identity, memory allocation, sharing, conflicts, and rejection statuses remain closed and deterministic. See [`NGINX_TRAFFIC_LIMITING_PHASE4D.md`](NGINX_TRAFFIC_LIMITING_PHASE4D.md).
 
 ## Manifest and versioning
 
@@ -111,7 +124,7 @@ Each result records three required tiers. APIs that need to distinguish deployme
 
 ## Compatibility and migration
 
-The three historic named exports and the `generators` map remain available after compilation. Their visible filename, content, deployment steps, and warning text remain compatible for valid browser inputs; an additive `metadata` field exposes the new contract result. The browser fields and copy/download workflow are unchanged. Generator manifests are the authoritative validation contract. The current browser field descriptors are presentation/compatibility data only and cannot weaken generator validation; making that UI fully manifest-driven belongs to the approved UI work in issue #12.
+The three historic named exports and the `generators` map remain available after compilation. Their filename, content, deployment steps, and warning text remain compatible for valid API callers; an additive `metadata` field exposes the contract result. Generator manifests remain the authoritative validation contract. The browser's Compose and systemd adapters preserve those inputs and outputs, while the Nginx workspace intentionally uses the newer composition artifacts instead of the historic single-file UI adapter.
 
 Malformed inputs are now intentionally stricter: unknown properties, non-matching primitive types (including string/number stand-ins for booleans), and invalid Compose restart policies are rejected instead of coerced, ignored, or defaulted. Browser-originated string ports remain supported and are normalized to integers. systemd arguments accept only literal tokens rather than ambiguous quoting or special syntax. These are correctness and injection-boundary changes. Users needing complex systemd escaping must edit and natively validate the generated unit outside Forge.
 

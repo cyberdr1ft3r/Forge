@@ -18,7 +18,7 @@ import {
 
 const target = {
   version: '1.24.0',
-  modules: ['http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
+  modules: ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'],
 };
 
 const reverseProxy = {
@@ -82,6 +82,16 @@ const logging = (overrides = {}) => ({
   },
 });
 
+const trafficLimiting = (policyId = 'client', overrides = {}) => ({
+  id: 'traffic-limiting',
+  input: {
+    policyId,
+    requestLimit: {rate: 20, unit: 'second', burst: 10, nodelay: false, zoneSizeMb: 10, statusCode: 429},
+    connectionLimit: {connections: 25, zoneSizeMb: 10, statusCode: 429},
+    ...overrides,
+  },
+});
+
 const compose = (capabilities, profile = 'full-config', selectedTarget = target) => composeNginxCapabilities({profile, target: selectedTarget, capabilities});
 const siteProxy = (id, domain, port = 3000) => ({id, capabilities: [{id: 'reverse-proxy', input: {domain, targetHost: '127.0.0.1', targetPort: port}}]});
 const composeSites = (sites, profile = 'full-config') => composeNginxSites({profile, target, sites});
@@ -94,7 +104,7 @@ test('multi-site API is additive and keeps legacy single-site artifacts byte-ide
 
   const multi = composeSites([siteProxy('app', 'app.example.com')]);
   assert.equal(multi.ok, true);
-  assert.equal(multi.provenance.version, '2.3.0');
+  assert.equal(multi.provenance.version, '2.4.0');
   assert.deepEqual(multi.provenance.sites, ['app']);
   assert.equal(multi.artifacts[0].content, before.artifacts[0].content);
 });
@@ -193,7 +203,7 @@ test('multi-site expansion remains bounded', () => {
 
 test('capability registry is typed, versioned, immutable, and includes the Phase 4 shelves', () => {
   const definitions = listCapabilityDefinitions();
-  assert.deepEqual(definitions.map(item => item.id).sort(), ['logging', 'reverse-proxy', 'routing', 'static-site', 'tls', 'upstream-load-balancing', 'websocket']);
+  assert.deepEqual(definitions.map(item => item.id).sort(), ['logging', 'reverse-proxy', 'routing', 'static-site', 'tls', 'traffic-limiting', 'upstream-load-balancing', 'websocket']);
   assert.ok(definitions.every(item => /^\d+\.\d+\.\d+$/.test(item.version)));
   assert.ok(definitions.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(definitions.every(item => item.astSurface.contexts.length > 0));
@@ -327,6 +337,149 @@ test('contradictory shared log-format identities fail closed', () => {
   ]);
   assert.equal(result.ok, false);
   assert.ok(result.diagnostics.some(item => item.code === 'composition.shared.conflict'));
+});
+
+test('traffic limiting is opt-in and emits separate typed request and connection zones', () => {
+  const baseline = compose([reverseProxy]);
+  assert.equal(baseline.ok, true);
+  assert.doesNotMatch(baseline.artifacts[0].content, /limit_(?:req|conn)/);
+
+  const result = compose([reverseProxy, trafficLimiting('public-api', {
+    requestLimit: {rate: 30, unit: 'minute', burst: 12, nodelay: true, zoneSizeMb: 8, statusCode: 429},
+    connectionLimit: {connections: 6, zoneSizeMb: 4, statusCode: 503},
+  })]);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /limit_req_zone \$binary_remote_addr zone=forge_req_public_api:8m rate=30r\/m;/);
+  assert.match(content, /limit_conn_zone \$binary_remote_addr zone=forge_conn_public_api:4m;/);
+  assert.match(content, /limit_req zone=forge_req_public_api burst=12 nodelay;/);
+  assert.match(content, /limit_req_status 429;/);
+  assert.match(content, /limit_conn forge_conn_public_api 6;/);
+  assert.match(content, /limit_conn_status 503;/);
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.traffic-limiting.client-ip'));
+  assert.ok(result.prerequisites.some(item => item.code === 'composition.traffic-limiting.capacity'));
+});
+
+test('request-only and connection-only policies preserve independent module requirements', () => {
+  const requestOnly = trafficLimiting('requests', {connectionLimit: undefined, requestLimit: {rate: 5}});
+  const requestResult = compose([reverseProxy, requestOnly], 'full-config', {...target, modules: ['http_limit_req', 'http_proxy']});
+  assert.equal(requestResult.ok, true);
+  assert.match(requestResult.artifacts[0].content, /limit_req zone=forge_req_requests;/);
+  assert.doesNotMatch(requestResult.artifacts[0].content, /limit_conn/);
+
+  const connectionOnly = trafficLimiting('connections', {requestLimit: undefined, connectionLimit: {connections: 50}});
+  const connectionResult = compose([reverseProxy, connectionOnly], 'full-config', {...target, modules: ['http_limit_conn', 'http_proxy']});
+  assert.equal(connectionResult.ok, true);
+  assert.match(connectionResult.artifacts[0].content, /limit_conn forge_conn_connections 50;/);
+  assert.doesNotMatch(connectionResult.artifacts[0].content, /limit_req/);
+
+  const missing = compose([reverseProxy, requestOnly], 'full-config', {...target, modules: ['http_proxy']});
+  assert.equal(missing.ok, false);
+  assert.ok(missing.diagnostics.some(item => item.code === 'composition.target.module-missing' && /http_limit_req/.test(item.message)));
+});
+
+test('traffic limiting composes with TLS, static, WebSocket, upstream, and logging shelves', () => {
+  const redirected = compose([reverseProxy, {...tls, input: {...tls.input, redirectHttp: true}}, trafficLimiting()]);
+  assert.equal(redirected.ok, true);
+  assert.equal((redirected.artifacts[0].content.match(/limit_req zone=forge_req_client/g) ?? []).length, 1, 'redirect server must not inherit enforcement');
+  assert.equal((redirected.artifacts[0].content.match(/limit_conn forge_conn_client/g) ?? []).length, 1, 'redirect server must not inherit enforcement');
+
+  assert.equal(compose([staticSite(), trafficLimiting('static')]).ok, true);
+  assert.equal(compose([reverseProxy, websocket, trafficLimiting('socket')]).ok, true);
+  assert.equal(compose([upstreamProxy(), upstream(), trafficLimiting('balanced')]).ok, true);
+  const logged = compose([reverseProxy, logging({accessLog: 'forge-json'}), trafficLimiting('logged')]);
+  assert.equal(logged.ok, true);
+  assert.match(logged.artifacts[0].content, /log_format forge_json_v1/);
+  assert.match(logged.artifacts[0].content, /limit_req_zone/);
+});
+
+test('multi-site traffic zones share only through an explicit equivalent policy identity', () => {
+  const shared = [
+    {id: 'bravo', capabilities: [siteProxy('unused', 'bravo.example.com').capabilities[0], trafficLimiting('shared-edge')]},
+    {id: 'alpha', capabilities: [siteProxy('unused', 'alpha.example.com').capabilities[0], trafficLimiting('shared-edge')]},
+  ];
+  const result = composeSites(shared);
+  const reordered = composeSites([...shared].reverse());
+  assert.equal(result.ok, true);
+  assert.deepEqual(reordered.artifacts, result.artifacts);
+  assert.equal((result.artifacts[0].content.match(/limit_req_zone .*forge_req_shared_edge/g) ?? []).length, 1);
+  assert.equal((result.artifacts[0].content.match(/limit_conn_zone .*forge_conn_shared_edge/g) ?? []).length, 1);
+  assert.equal((result.artifacts[0].content.match(/limit_req zone=forge_req_shared_edge/g) ?? []).length, 2);
+  assert.ok(result.explanations.some(item => item.code === 'composition.shared.dependencies' && item.semanticIdentity === 'limit_req_zone:forge_req_shared_edge' && item.siteIds?.join(',') === 'alpha,bravo'));
+
+  const independent = composeSites([
+    {id: 'alpha', capabilities: [siteProxy('unused', 'alpha.example.com').capabilities[0], trafficLimiting('alpha')]},
+    {id: 'bravo', capabilities: [siteProxy('unused', 'bravo.example.com').capabilities[0], trafficLimiting('bravo')]},
+  ]);
+  assert.equal(independent.ok, true);
+  assert.equal((independent.artifacts[0].content.match(/limit_req_zone/g) ?? []).length, 2);
+});
+
+test('contradictory shared zone identities fail closed and fragments separate HTTP definitions', () => {
+  const conflict = composeSites([
+    {id: 'alpha', capabilities: [siteProxy('unused', 'alpha.example.com').capabilities[0], trafficLimiting('shared', {connectionLimit: undefined, requestLimit: {rate: 10}})]},
+    {id: 'bravo', capabilities: [siteProxy('unused', 'bravo.example.com').capabilities[0], trafficLimiting('shared', {connectionLimit: undefined, requestLimit: {rate: 20}})]},
+  ]);
+  assert.equal(conflict.ok, false);
+  assert.ok(conflict.diagnostics.some(item => item.code === 'composition.shared.conflict'));
+
+  const fragments = compose([reverseProxy, trafficLimiting('fragment')], 'site-fragment');
+  assert.equal(fragments.ok, true);
+  assert.deepEqual(fragments.artifacts.map(item => item.filename), ['site.conf', 'http-shared.conf']);
+  assert.doesNotMatch(fragments.artifacts[0].content, /limit_(?:req|conn)_zone/);
+  assert.match(fragments.artifacts[1].content, /limit_req_zone/);
+  assert.match(fragments.artifacts[1].content, /limit_conn_zone/);
+});
+
+test('traffic-limiting input rejects unsafe identities, coercion, invalid bounds, and ambiguous behavior', () => {
+  const invalidInputs = [
+    {},
+    {policyId: 'empty'},
+    {policyId: 'Upper', requestLimit: {rate: 1}},
+    {policyId: 'bad;include', requestLimit: {rate: 1}},
+    {policyId: 'a'.repeat(26), requestLimit: {rate: 1}},
+    {policyId: 'safe', requestLimit: {rate: 0}},
+    {policyId: 'safe', requestLimit: {rate: 10_001}},
+    {policyId: 'safe', requestLimit: {rate: '10'}},
+    {policyId: 'safe', requestLimit: {rate: 1, unit: 'hour'}},
+    {policyId: 'safe', requestLimit: {rate: 1, burst: -1}},
+    {policyId: 'safe', requestLimit: {rate: 1, burst: 0, nodelay: true}},
+    {policyId: 'safe', requestLimit: {rate: 1, zoneSizeMb: 33}},
+    {policyId: 'safe', requestLimit: {rate: 1, statusCode: 418}},
+    {policyId: 'safe', connectionLimit: {connections: 0}},
+    {policyId: 'safe', connectionLimit: {connections: 10_001}},
+    {policyId: 'safe', connectionLimit: {connections: 1, statusCode: 500}},
+    {policyId: 'safe', connectionLimit: {connections: 1, key: '$http_x_forwarded_for'}},
+    {policyId: 'safe', requestLimit: {rate: 1}, extra: true},
+  ];
+  for (const input of invalidInputs) {
+    const result = compose([reverseProxy, {id: 'traffic-limiting', input}]);
+    assert.equal(result.ok, false, JSON.stringify(input));
+    assert.ok(result.diagnostics.some(item => item.stage === 'input'));
+  }
+  const owner = compose([{id: 'traffic-limiting', input: trafficLimiting().input}]);
+  assert.equal(owner.ok, false);
+  assert.ok(owner.diagnostics.some(item => item.code === 'composition.dependency.site-owner'));
+});
+
+test('multi-site traffic limiting enforces a 256 MiB distinct-zone budget', () => {
+  const atLimit = composeSites(Array.from({length: 4}, (_, index) => ({
+    id: `site-${index}`,
+    capabilities: [siteProxy('unused', `site-${index}.example.com`).capabilities[0], trafficLimiting(`policy-${index}`, {
+      requestLimit: {rate: 1, zoneSizeMb: 32},
+      connectionLimit: {connections: 1, zoneSizeMb: 32},
+    })],
+  })));
+  assert.equal(atLimit.ok, true);
+  const exceeded = composeSites(Array.from({length: 5}, (_, index) => ({
+    id: `site-${index}`,
+    capabilities: [siteProxy('unused', `site-${index}.example.com`).capabilities[0], trafficLimiting(`policy-${index}`, {
+      requestLimit: {rate: 1, zoneSizeMb: 32},
+      connectionLimit: {connections: 1, zoneSizeMb: 32},
+    })],
+  })));
+  assert.equal(exceeded.ok, false);
+  assert.ok(exceeded.diagnostics.some(item => item.code === 'composition.traffic-limiting.memory-budget'));
 });
 
 test('upstream load balancing emits a trusted HTTP-level block and preserves proxy URI behavior', () => {

@@ -9,6 +9,10 @@ npm install
 npm run typecheck
 npm run build
 npm test
+node --check scripts/build-static.mjs
+node --check scripts/render-nginx-template.mjs
+node --check scripts/verify-static-manifest.mjs
+npm run test:release
 node --check server.js
 node --check dist/app.js
 node --check dist/generators/index.js
@@ -35,6 +39,7 @@ The browser app is available at http://127.0.0.1:4173.
 - [ ] Output reviewed for directive injection or quoting issues
 - [ ] Any required native validation performed and distinguished from schema validation
 - [ ] Rollback plan described
+- [ ] Static release manifest is reproducible and public-root contents were reviewed
 
 ## Quality gate
 
