@@ -16,7 +16,7 @@ import type {
   PlannedRoute,
 } from './types.js';
 
-const ENGINE_VERSION = '2.4.0' as const;
+const ENGINE_VERSION = '2.5.0' as const;
 const MAX_SITES = 16;
 const MAX_TOTAL_ROUTES = 256;
 const SITE_ID = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -192,7 +192,9 @@ function planSite(id: string, capabilitiesInput: readonly unknown[], request: Ng
     source: scopeSource(trafficLimiting.source, id),
     directives: trafficLimiting.directives.map(node => ({...node, source: scopeSource(node.source, id)})),
   };
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite, scopedLogging, scopedTrafficLimiting);
+  const serverDirectives = contributions.flatMap(item => item.serverDirectives ?? []).map(node => ({...node, source: scopeSource(node.source, id)}));
+  const httpsOnlyDirectives = contributions.flatMap(item => item.httpsOnlyDirectives ?? []).map(node => ({...node, source: scopeSource(node.source, id)}));
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketRoutes, scopedTls, id, scopedStaticSite, scopedLogging, scopedTrafficLimiting, serverDirectives, httpsOnlyDirectives);
   const explanations = contributions.flatMap(item => item.explanations ?? []).map(item => ({...item, siteId: id}));
   const prerequisites = contributions.flatMap(item => item.prerequisites ?? []).map(item => ({...item, siteId: id}));
   const shared = contributions.flatMap(item => item.sharedHttpNodes ?? []).map(node => ({node: scopeNode(node, id), siteId: id}));

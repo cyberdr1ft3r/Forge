@@ -18,7 +18,7 @@ For clean full-page evidence, the capture helper temporarily hides the keyboard-
 
 - A4 is the approved focused workspace direction, not a final landing-page design. The landing page reuses its dark Precision palette and compact navigation without claiming final Figma approval.
 - The implementation grows vertically instead of clipping the configuration panel to A4's fixed 643-pixel study height. Inline help, conditional TLS fields, compatibility assumptions, validation errors and accessibility content remain readable.
-- The unsupported security-response-header option shown in the exploration is omitted. Forge exposes only capabilities backed by the merged typed engine.
+- Security-response headers, bounded timeouts, gzip, and proxy buffering are exposed only through the M1-B typed capability contracts; no raw directive editor is present.
 - Multiple returned artifacts use native selector buttons with primary/supporting labels. A4 illustrates one file only.
 - Forge adds the target-host validation state and detailed prerequisites because the product must distinguish composition from deployment readiness.
 - Tablet and mobile layouts stack the form and preview instead of preserving the desktop ratio.

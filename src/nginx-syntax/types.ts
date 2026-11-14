@@ -31,6 +31,9 @@ export type NginxArgumentKind =
   | 'variable'
   | 'keyword'
   | 'header-name'
+  | 'size'
+  | 'duration'
+  | 'media-type'
   | 'quoted';
 
 export type KnownNginxVariable =
@@ -59,11 +62,20 @@ export type NginxArgument =
 
 export type KnownDirectiveName =
   | 'access_log'
+  | 'add_header'
+  | 'client_body_timeout'
+  | 'client_header_timeout'
+  | 'client_max_body_size'
   | 'daemon'
   | 'default_type'
   | 'error_log'
   | 'include'
   | 'index'
+  | 'gzip'
+  | 'gzip_comp_level'
+  | 'gzip_min_length'
+  | 'gzip_types'
+  | 'gzip_vary'
   | 'keepalive'
   | 'least_conn'
   | 'limit_conn'
@@ -76,12 +88,22 @@ export type KnownDirectiveName =
   | 'log_format'
   | 'pid'
   | 'proxy_pass'
+  | 'proxy_buffer_size'
+  | 'proxy_buffering'
+  | 'proxy_buffers'
+  | 'proxy_busy_buffers_size'
+  | 'proxy_connect_timeout'
   | 'proxy_http_version'
+  | 'proxy_max_temp_file_size'
+  | 'proxy_read_timeout'
+  | 'proxy_request_buffering'
+  | 'proxy_send_timeout'
   | 'proxy_set_header'
   | 'return'
   | 'root'
   | 'server_name'
   | 'server_tokens'
+  | 'send_timeout'
   | 'ssl_certificate'
   | 'ssl_certificate_key'
   | 'ssl_protocols'
@@ -166,6 +188,9 @@ export const nginxArgument = Object.freeze({
   variable: (value: KnownNginxVariable): NginxArgument => ({kind: 'variable', value}),
   keyword: (value: string): NginxArgument => ({kind: 'keyword', value}),
   headerName: (value: string): NginxArgument => ({kind: 'header-name', value}),
+  size: (value: string): NginxArgument => ({kind: 'size', value}),
+  duration: (value: string): NginxArgument => ({kind: 'duration', value}),
+  mediaType: (value: string): NginxArgument => ({kind: 'media-type', value}),
   quoted: (value: string): NginxArgument => ({kind: 'quoted', value}),
 } as const);
 

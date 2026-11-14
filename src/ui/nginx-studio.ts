@@ -60,6 +60,28 @@ export interface NginxStudioSite {
   connectionCount: string;
   connectionZoneMb: string;
   connectionStatus: '429' | '503';
+  securityHeaders: boolean;
+  securityHeaderPreset: 'balanced' | 'strict';
+  hstsPreset: 'off' | 'one-year' | 'two-years-preload';
+  requestTimeouts: boolean;
+  clientMaxBodySizeMb: string;
+  clientBodyTimeoutSeconds: string;
+  clientHeaderTimeoutSeconds: string;
+  sendTimeoutSeconds: string;
+  proxyConnectTimeoutSeconds: string;
+  proxySendTimeoutSeconds: string;
+  proxyReadTimeoutSeconds: string;
+  compression: boolean;
+  compressionPreset: 'web' | 'api' | 'broad';
+  compressionMinLengthBytes: string;
+  compressionLevel: string;
+  compressionVary: boolean;
+  proxyBuffering: boolean;
+  proxyBufferingProfile: 'bounded' | 'streaming';
+  proxyBufferSizeKb: string;
+  proxyBufferCount: string;
+  proxyBusyBuffersSizeKb: string;
+  proxyMaxTempFileSizeMb: string;
 }
 
 export interface NginxStudioState {
@@ -73,8 +95,8 @@ export interface NginxStudioRequestBuild {
   readonly diagnosticTargets: ReadonlyMap<string, string>;
 }
 
-export const NGINX_STUDIO_TARGET_VERSION = '1.26.3';
-export const NGINX_STUDIO_TARGET_MODULES = ['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
+export const NGINX_STUDIO_TARGET_VERSION = '1.30.6';
+export const NGINX_STUDIO_TARGET_MODULES = ['http_gzip', 'http_headers', 'http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl'] as const;
 export const NGINX_STUDIO_LIMITS = {sites: 16, routesPerSite: 32, backendsPerUpstream: 16} as const;
 
 export function nginxControlId(key: string, field: string): string {
@@ -101,6 +123,11 @@ export function createNginxSite(key: string, ordinal: number): NginxStudioSite {
     logging: false, accessLog: 'combined', accessLogPath: `/var/log/nginx/${siteId}-access.log`, errorLogPath: `/var/log/nginx/${siteId}-error.log`, errorLogLevel: 'error',
     requestLimit: false, connectionLimit: false, policyId: siteId, requestRate: '10', requestUnit: 'second', requestBurst: '20', requestNoDelay: true,
     requestZoneMb: '10', requestStatus: '429', connectionCount: '100', connectionZoneMb: '10', connectionStatus: '429',
+    securityHeaders: false, securityHeaderPreset: 'balanced', hstsPreset: 'off',
+    requestTimeouts: false, clientMaxBodySizeMb: '10', clientBodyTimeoutSeconds: '60', clientHeaderTimeoutSeconds: '60', sendTimeoutSeconds: '60',
+    proxyConnectTimeoutSeconds: '10', proxySendTimeoutSeconds: '60', proxyReadTimeoutSeconds: '60',
+    compression: false, compressionPreset: 'web', compressionMinLengthBytes: '1024', compressionLevel: '5', compressionVary: true,
+    proxyBuffering: false, proxyBufferingProfile: 'bounded', proxyBufferSizeKb: '8', proxyBufferCount: '8', proxyBusyBuffersSizeKb: '16', proxyMaxTempFileSizeMb: '64',
   };
 }
 
@@ -204,6 +231,37 @@ export function buildNginxStudioRequest(state: Readonly<NginxStudioState>): Ngin
       'requestLimit.burst': [site.key, 'requestBurst'], 'requestLimit.nodelay': [site.key, 'requestNoDelay'], 'requestLimit.zoneSizeMb': [site.key, 'requestZoneMb'],
       'requestLimit.statusCode': [site.key, 'requestStatus'], 'connectionLimit.connections': [site.key, 'connectionCount'],
       'connectionLimit.zoneSizeMb': [site.key, 'connectionZoneMb'], 'connectionLimit.statusCode': [site.key, 'connectionStatus'],
+    });
+
+    if (site.securityHeaders) addCapability('security-headers', {preset: site.securityHeaderPreset, hsts: site.hstsPreset}, {
+      preset: [site.key, 'securityHeaderPreset'], hsts: [site.key, 'hstsPreset'],
+    });
+
+    if (site.requestTimeouts) addCapability('request-timeouts', {
+      clientMaxBodySizeMb: numeric(site.clientMaxBodySizeMb), clientBodyTimeoutSeconds: numeric(site.clientBodyTimeoutSeconds),
+      clientHeaderTimeoutSeconds: numeric(site.clientHeaderTimeoutSeconds), sendTimeoutSeconds: numeric(site.sendTimeoutSeconds),
+      ...(site.workflow === 'reverse-proxy' ? {proxy: {connectSeconds: numeric(site.proxyConnectTimeoutSeconds), sendSeconds: numeric(site.proxySendTimeoutSeconds), readSeconds: numeric(site.proxyReadTimeoutSeconds)}} : {}),
+    }, {
+      clientMaxBodySizeMb: [site.key, 'clientMaxBodySizeMb'], clientBodyTimeoutSeconds: [site.key, 'clientBodyTimeoutSeconds'],
+      clientHeaderTimeoutSeconds: [site.key, 'clientHeaderTimeoutSeconds'], sendTimeoutSeconds: [site.key, 'sendTimeoutSeconds'],
+      'proxy.connectSeconds': [site.key, 'proxyConnectTimeoutSeconds'], 'proxy.sendSeconds': [site.key, 'proxySendTimeoutSeconds'], 'proxy.readSeconds': [site.key, 'proxyReadTimeoutSeconds'],
+    });
+
+    if (site.compression) {
+      const types = site.compressionPreset === 'api'
+        ? ['application/json', 'application/xml', 'text/plain']
+        : site.compressionPreset === 'broad'
+          ? ['application/javascript', 'application/json', 'application/manifest+json', 'application/xml', 'font/woff2', 'image/svg+xml', 'text/css', 'text/plain', 'text/xml']
+          : ['application/javascript', 'application/json', 'font/woff2', 'image/svg+xml', 'text/css', 'text/plain'];
+      addCapability('compression', {types, minLengthBytes: numeric(site.compressionMinLengthBytes), level: numeric(site.compressionLevel), vary: site.compressionVary}, {
+        types: [site.key, 'compressionPreset'], minLengthBytes: [site.key, 'compressionMinLengthBytes'], level: [site.key, 'compressionLevel'], vary: [site.key, 'compressionVary'],
+      });
+    }
+
+    if (site.proxyBuffering && site.workflow === 'reverse-proxy') addCapability('proxy-buffering', site.proxyBufferingProfile === 'streaming' ? {profile: 'streaming'} : {
+      profile: 'bounded', bufferSizeKb: numeric(site.proxyBufferSizeKb), bufferCount: numeric(site.proxyBufferCount), busyBuffersSizeKb: numeric(site.proxyBusyBuffersSizeKb), maxTempFileSizeMb: numeric(site.proxyMaxTempFileSizeMb),
+    }, {
+      profile: [site.key, 'proxyBufferingProfile'], bufferSizeKb: [site.key, 'proxyBufferSizeKb'], bufferCount: [site.key, 'proxyBufferCount'], busyBuffersSizeKb: [site.key, 'proxyBusyBuffersSizeKb'], maxTempFileSizeMb: [site.key, 'proxyMaxTempFileSizeMb'],
     });
 
     return {id: site.id, capabilities};

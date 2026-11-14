@@ -2,7 +2,7 @@ import {baseArtifactChecks} from '../core/validation.js';
 import type {Diagnostic, OutputArtifact, ValidationRecord, ValidationSummary} from '../core/types.js';
 import {serializeNginxDocument, serializeNginxHttpFragment} from '../nginx-syntax/serializer.js';
 import {block, directive, nginxArgument as arg} from '../nginx-syntax/types.js';
-import type {BlockNode, NginxNode, NginxSourceProvenance} from '../nginx-syntax/types.js';
+import type {BlockNode, DirectiveNode, NginxNode, NginxSourceProvenance} from '../nginx-syntax/types.js';
 import {getCapabilityDefinition} from './capabilities.js';
 import type {
   CapabilityContribution,
@@ -21,7 +21,7 @@ import type {
   TlsContribution,
 } from './types.js';
 
-const ENGINE_VERSION = '2.4.0' as const;
+const ENGINE_VERSION = '2.5.0' as const;
 const knownModules = new Set<NginxModule>(['http_limit_conn', 'http_limit_req', 'http_log', 'http_map', 'http_proxy', 'http_rewrite', 'http_ssl']);
 
 const diagnostic = (code: string, message: string, path: string, stage: 'input' | 'static' | 'generation' = 'input'): Diagnostic => ({code, message, path, severity: 'error', stage});
@@ -167,6 +167,8 @@ export function applicationServers(
   staticSite?: StaticSiteContribution,
   logging?: LoggingContribution,
   trafficLimiting?: TrafficLimitingContribution,
+  serverDirectives: readonly DirectiveNode[] = [],
+  httpsOnlyDirectives: readonly DirectiveNode[] = [],
 ): readonly BlockNode<'server'>[] {
   const reverseSource: NginxSourceProvenance = siteId === undefined
     ? {kind: 'capability', id: 'reverse-proxy', version: ENGINE_VERSION}
@@ -182,6 +184,7 @@ export function applicationServers(
       directive('server_name', [arg.domain(domain)], ownerSource),
       ...(logging?.directives ?? []),
       ...(trafficLimiting?.directives ?? []),
+      ...serverDirectives,
       ...applicationNodes,
     ], ownerSource)];
   }
@@ -192,6 +195,8 @@ export function applicationServers(
     ...(logging?.directives ?? []),
     ...(trafficLimiting?.directives ?? []),
     ...tls.directives,
+    ...serverDirectives,
+    ...httpsOnlyDirectives,
     ...applicationNodes,
   ], tls.source);
   if (!tls.redirectHttp) return [secure];
@@ -342,6 +347,17 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   const staticSite = contributions.map(item => item.staticSite).find(value => value !== undefined);
   const logging = contributions.map(item => item.logging).find(value => value !== undefined);
   const trafficLimiting = contributions.map(item => item.trafficLimiting).find(value => value !== undefined);
+  const hasProxyOwner = capabilities.some(item => item.definition.id === 'reverse-proxy');
+  const capabilityInputPath = (id: NginxCapabilityId, field?: string): string => {
+    const index = (candidate.capabilities as readonly unknown[]).findIndex(item => item !== null && typeof item === 'object' && !Array.isArray(item) && (item as {id?: unknown}).id === id);
+    return `request.capabilities[${index}].input${field === undefined ? '' : `.${field}`}`;
+  };
+  if (!hasProxyOwner && contributions.some(item => item.requiresProxyOwner === true)) return failure([diagnostic('composition.capability.proxy-owner', 'Selected proxy-specific timeout controls require the reverse-proxy site owner.', capabilityInputPath('request-timeouts', 'proxy'), 'input')], capabilities, explanations, prerequisites);
+  const serverDirectives = contributions.flatMap(item => item.serverDirectives ?? []);
+  const httpsOnlyDirectives = contributions.flatMap(item => item.httpsOnlyDirectives ?? []);
+  if (tls === undefined && httpsOnlyDirectives.length > 0) return failure([diagnostic('composition.security-headers.hsts-requires-tls', 'HSTS requires the TLS capability because Forge emits it only from an HTTPS application server.', capabilityInputPath('security-headers', 'hsts'), 'input')], capabilities, explanations, prerequisites);
+  if (capabilities.some(item => item.definition.id === 'websocket') && capabilities.some(item => item.definition.id === 'proxy-buffering')) explanations.push({code: 'composition.proxy-buffering.websocket', capabilityId: 'proxy-buffering', context: 'server', semanticIdentity: 'proxy-buffering:websocket', message: 'WebSocket upgrades switch to tunnel semantics after the handshake; separately verify handshake buffering, long-lived idle timeouts, and upstream backpressure.'});
+  sortExplanations(explanations);
   const sharedByIdentity = new Map<string, NginxNode>();
   let sharedConflict: Diagnostic | undefined;
   for (const node of contributions.flatMap(item => item.sharedHttpNodes ?? [])) {
@@ -352,7 +368,7 @@ export function composeNginxCapabilities(request: unknown): NginxCompositionOutc
   }
   if (sharedConflict !== undefined) return failure([sharedConflict], capabilities, explanations, prerequisites, true);
   const sharedHttpNodes = [...sharedByIdentity.entries()].sort(([left], [right]) => left.localeCompare(right, 'en')).map(([, node]) => node);
-  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls, undefined, staticSite, logging, trafficLimiting);
+  const servers = applicationServers(domain, [...routes].sort((left, right) => left.prefix.localeCompare(right.prefix, 'en')), websocketSet, tls, undefined, staticSite, logging, trafficLimiting, serverDirectives, httpsOnlyDirectives);
   const engineSource: NginxSourceProvenance = {kind: 'engine', id: 'nginx-capability-composition', version: ENGINE_VERSION};
 
   const document = candidate.profile === 'full-config'

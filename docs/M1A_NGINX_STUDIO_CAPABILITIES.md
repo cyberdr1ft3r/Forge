@@ -20,7 +20,7 @@ Dynamic controls use stable, non-user-derived editor keys. Add/remove actions pr
 ## Assumptions and risk controls
 
 - Generation remains browser-local. No input is sent, executed, deployed, reloaded, or used to inspect a host.
-- Studio targets Nginx 1.26.3 with the declared `http_limit_conn`, `http_limit_req`, `http_log`, `http_map`, `http_proxy`, `http_rewrite`, and `http_ssl` modules. These are user-visible compatibility assumptions, not discovered host facts.
+- Studio targets the maintained stable version and declared standard modules documented in `NGINX_SUPPORT_POLICY.md`. These are user-visible compatibility assumptions, not discovered host facts.
 - Browser generation reports native validation as unavailable and target-host checks as not run. Only the separate pinned native harness may claim a successful `nginx -t` execution.
 - Collection sizes and numeric values remain bounded by existing engine schemas. Submitted strings pass unchanged into typed validation; the adapter does not escape unsafe input into apparently valid directives.
 - Advanced settings remain active when switching to Basic mode. Studio warns about this state so hiding controls cannot silently change generated configuration.

@@ -196,6 +196,18 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return validLocationPrefix(value) ? undefined : 'Location prefix must be a literal absolute URI path without globs, regex modifiers, variables, traversal, or query syntax.';
     case 'header-name':
       return /^[A-Za-z][A-Za-z0-9-]{0,126}$/.test(value) ? undefined : 'Header name contains unsupported characters or is too long.';
+    case 'size': {
+      const match = /^(0|[1-9]\d{0,3})(k|m)$/.exec(value);
+      if (match === null) return 'Size must be a bounded integer followed by k or m.';
+      const amount = Number(match[1]);
+      return amount >= 0 && amount <= 1024 ? undefined : 'Size must not exceed 1024 units.';
+    }
+    case 'duration': {
+      const match = /^([1-9]\d{0,3})s$/.exec(value);
+      return match !== null && Number(match[1]) <= 3600 ? undefined : 'Duration must be between 1s and 3600s.';
+    }
+    case 'media-type':
+      return /^(?:application|font|image|text)\/[a-z0-9][a-z0-9.+-]{0,63}$/.test(value) ? undefined : 'Media type is outside the trusted MIME grammar.';
     case 'quoted':
       return value.length <= 1024 && !/[\0\r\n\t]/.test(value) ? undefined : 'Quoted value contains a control character or exceeds 1024 characters.';
     case 'literal':

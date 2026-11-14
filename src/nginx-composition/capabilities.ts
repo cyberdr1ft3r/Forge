@@ -4,13 +4,17 @@ import {block, directive, FORGE_JSON_LOG_FORMAT_NAME, FORGE_JSON_LOG_FORMAT_TEMP
 import type {NginxArgumentKind, NginxSourceProvenance} from '../nginx-syntax/types.js';
 import type {
   CapabilityValidation,
+  CompressionInput,
   ErrorLogLevel,
   LoggingInput,
   NginxCapabilityDefinition,
   NginxCapabilityId,
+  ProxyBufferingInput,
+  RequestTimeoutsInput,
   ReverseProxyInput,
   RouteInput,
   RoutingInput,
+  SecurityHeadersInput,
   StaticSiteInput,
   TrafficLimitingInput,
   TrafficLimitStatus,
@@ -330,6 +334,83 @@ function validateTrafficLimiting(input: unknown, path: string): CapabilityValida
   return success({policyId: policyId.value, ...(requestLimit === undefined ? {} : {requestLimit}), ...(connectionLimit === undefined ? {} : {connectionLimit})});
 }
 
+const compressionTypes = ['application/javascript', 'application/json', 'application/manifest+json', 'application/xml', 'font/woff2', 'image/svg+xml', 'text/css', 'text/plain', 'text/xml'] as const;
+
+function validateSecurityHeaders(input: unknown, path: string): CapabilityValidation<SecurityHeadersInput> {
+  const object = record(input, path, ['preset', 'hsts']);
+  if (!object.ok) return object;
+  if (object.value.preset !== 'balanced' && object.value.preset !== 'strict') return failure(inputError('composition.security-headers.preset', 'Security-header preset must be balanced or strict.', `${path}.preset`));
+  const hsts = object.value.hsts ?? 'off';
+  if (hsts !== 'off' && hsts !== 'one-year' && hsts !== 'two-years-preload') return failure(inputError('composition.security-headers.hsts', 'HSTS preset must be off, one-year, or two-years-preload.', `${path}.hsts`));
+  return success({preset: object.value.preset, hsts});
+}
+
+function validateRequestTimeouts(input: unknown, path: string): CapabilityValidation<RequestTimeoutsInput> {
+  const object = record(input, path, ['clientMaxBodySizeMb', 'clientBodyTimeoutSeconds', 'clientHeaderTimeoutSeconds', 'sendTimeoutSeconds', 'proxy']);
+  if (!object.ok) return object;
+  const body = boundedInteger(object.value.clientMaxBodySizeMb, 'Maximum request body size', `${path}.clientMaxBodySizeMb`, 1, 1024);
+  if (!body.ok) return body;
+  const bodyTimeout = boundedInteger(object.value.clientBodyTimeoutSeconds, 'Client body timeout', `${path}.clientBodyTimeoutSeconds`, 1, 300);
+  if (!bodyTimeout.ok) return bodyTimeout;
+  const headerTimeout = boundedInteger(object.value.clientHeaderTimeoutSeconds, 'Client header timeout', `${path}.clientHeaderTimeoutSeconds`, 1, 300);
+  if (!headerTimeout.ok) return headerTimeout;
+  const sendTimeout = boundedInteger(object.value.sendTimeoutSeconds, 'Client send timeout', `${path}.sendTimeoutSeconds`, 1, 3600);
+  if (!sendTimeout.ok) return sendTimeout;
+  let proxy: RequestTimeoutsInput['proxy'];
+  if (object.value.proxy !== undefined) {
+    const proxyObject = record(object.value.proxy, `${path}.proxy`, ['connectSeconds', 'sendSeconds', 'readSeconds']);
+    if (!proxyObject.ok) return proxyObject;
+    const connect = boundedInteger(proxyObject.value.connectSeconds, 'Proxy connect timeout', `${path}.proxy.connectSeconds`, 1, 75);
+    if (!connect.ok) return connect;
+    const send = boundedInteger(proxyObject.value.sendSeconds, 'Proxy send timeout', `${path}.proxy.sendSeconds`, 1, 3600);
+    if (!send.ok) return send;
+    const read = boundedInteger(proxyObject.value.readSeconds, 'Proxy read timeout', `${path}.proxy.readSeconds`, 1, 3600);
+    if (!read.ok) return read;
+    proxy = {connectSeconds: connect.value, sendSeconds: send.value, readSeconds: read.value};
+  }
+  return success({clientMaxBodySizeMb: body.value, clientBodyTimeoutSeconds: bodyTimeout.value, clientHeaderTimeoutSeconds: headerTimeout.value, sendTimeoutSeconds: sendTimeout.value, ...(proxy === undefined ? {} : {proxy})});
+}
+
+function validateCompression(input: unknown, path: string): CapabilityValidation<CompressionInput> {
+  const object = record(input, path, ['types', 'minLengthBytes', 'level', 'vary']);
+  if (!object.ok) return object;
+  if (!Array.isArray(object.value.types) || object.value.types.length === 0 || object.value.types.length > compressionTypes.length) return failure(inputError('composition.compression.types', `Compression types must contain 1-${compressionTypes.length} trusted MIME types.`, `${path}.types`));
+  const types: string[] = [];
+  for (let index = 0; index < object.value.types.length; index += 1) {
+    const value = object.value.types[index];
+    if (typeof value !== 'string' || !compressionTypes.includes(value as typeof compressionTypes[number])) return failure(inputError('composition.compression.type', `Compression type must be one of: ${compressionTypes.join(', ')}.`, `${path}.types[${index}]`));
+    if (types.includes(value)) return failure(inputError('composition.compression.duplicate', `Compression type ${value} is duplicated.`, `${path}.types[${index}]`));
+    types.push(value);
+  }
+  types.sort((left, right) => left.localeCompare(right, 'en'));
+  const minLength = boundedInteger(object.value.minLengthBytes, 'Compression minimum length', `${path}.minLengthBytes`, 256, 65_536);
+  if (!minLength.ok) return minLength;
+  const level = boundedInteger(object.value.level, 'Compression level', `${path}.level`, 1, 9);
+  if (!level.ok) return level;
+  const vary = booleanValue(object.value.vary, 'Compression Vary header', `${path}.vary`, true);
+  if (!vary.ok) return vary;
+  return success({types, minLengthBytes: minLength.value, level: level.value, vary: vary.value});
+}
+
+function validateProxyBuffering(input: unknown, path: string): CapabilityValidation<ProxyBufferingInput> {
+  const object = record(input, path, ['profile', 'bufferSizeKb', 'bufferCount', 'busyBuffersSizeKb', 'maxTempFileSizeMb']);
+  if (!object.ok) return object;
+  if (object.value.profile !== 'bounded' && object.value.profile !== 'streaming') return failure(inputError('composition.proxy-buffering.profile', 'Proxy buffering profile must be bounded or streaming.', `${path}.profile`));
+  if (object.value.profile === 'streaming') {
+    const unexpected = ['bufferSizeKb', 'bufferCount', 'busyBuffersSizeKb', 'maxTempFileSizeMb'].find(field => object.value[field] !== undefined);
+    return unexpected === undefined ? success({profile: 'streaming'}) : failure(inputError('composition.proxy-buffering.streaming-field', `${unexpected} must be omitted for the streaming profile.`, `${path}.${unexpected}`));
+  }
+  const size = boundedInteger(object.value.bufferSizeKb, 'Proxy buffer size', `${path}.bufferSizeKb`, 4, 64);
+  if (!size.ok) return size;
+  const count = boundedInteger(object.value.bufferCount, 'Proxy buffer count', `${path}.bufferCount`, 4, 16);
+  if (!count.ok) return count;
+  const busy = boundedInteger(object.value.busyBuffersSizeKb, 'Proxy busy buffer size', `${path}.busyBuffersSizeKb`, size.value * 2, size.value * (count.value - 1));
+  if (!busy.ok) return busy;
+  const temp = boundedInteger(object.value.maxTempFileSizeMb, 'Proxy temporary-file limit', `${path}.maxTempFileSizeMb`, 0, 1024);
+  if (!temp.ok) return temp;
+  return success({profile: 'bounded', bufferSizeKb: size.value, bufferCount: count.value, busyBuffersSizeKb: busy.value, maxTempFileSizeMb: temp.value});
+}
+
 function trafficZoneName(kind: 'req' | 'conn', policyId: string): string {
   return `forge_${kind}_${policyId.replaceAll('-', '_')}`;
 }
@@ -341,6 +422,154 @@ function parentDirectory(path: string): string {
 function source(id: NginxCapabilityId, version: string): NginxSourceProvenance {
   return {kind: 'capability', id, version};
 }
+
+const securityHeaderValues = {
+  balanced: {
+    csp: "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
+    referrer: 'strict-origin-when-cross-origin',
+  },
+  strict: {
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+    referrer: 'no-referrer',
+  },
+} as const;
+const permissionsPolicy = 'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()';
+
+const securityHeaders: NginxCapabilityDefinition<SecurityHeadersInput> = {
+  id: 'security-headers', version: '1.0.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'preset', type: 'enum', required: true, values: ['balanced', 'strict'], description: 'Fixed reviewed response-header policy.'},
+    {name: 'hsts', type: 'enum', required: false, values: ['off', 'one-year', 'two-years-preload'], description: 'HTTPS-only HSTS policy; preload requires independent eligibility review.'},
+  ]},
+  dependencies: [], incompatibleWith: [], requiresSiteOwner: true,
+  astSurface: {contexts: ['server'], directives: ['add_header'], blocks: []},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_headers']}),
+  validate: validateSecurityHeaders,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    const preset = securityHeaderValues[input.preset];
+    const headers = [
+      ['Content-Security-Policy', preset.csp],
+      ['X-Content-Type-Options', 'nosniff'],
+      ['X-Frame-Options', 'DENY'],
+      ['Referrer-Policy', preset.referrer],
+      ['Permissions-Policy', permissionsPolicy],
+    ] as const;
+    const hstsValue = input.hsts === 'one-year' ? 'max-age=31536000; includeSubDomains' : 'max-age=63072000; includeSubDomains; preload';
+    return {
+      serverDirectives: headers.map(([name, value]) => directive('add_header', [arg.headerName(name), arg.quoted(value), arg.keyword('always')], provenance)),
+      httpsOnlyDirectives: input.hsts === 'off' ? [] : [directive('add_header', [arg.headerName('Strict-Transport-Security'), arg.quoted(hstsValue), arg.keyword('always')], provenance)],
+      prerequisites: [
+        {code: `composition.security-headers.compatibility.${input.preset}`, capabilityId: this.id, kind: 'operator-action', description: input.preset === 'strict' ? 'Test the strict CSP against every script, style, image, font, connection, form, and embedded-content workflow; incompatible resources will be blocked.' : 'Test the balanced CSP and Permissions-Policy against application integrations before rollout; fixed presets may block required third-party content or browser features.'},
+        ...(input.hsts === 'two-years-preload' ? [{code: 'composition.security-headers.hsts-preload', capabilityId: this.id, kind: 'operator-action' as const, description: 'Verify every subdomain is permanently HTTPS-capable and independently confirm browser preload-list eligibility before submission.'}] : []),
+      ],
+      explanations: [
+        {code: `composition.security-headers.preset.${input.preset}`, capabilityId: this.id, context: 'server', semanticIdentity: 'security-headers', message: `The fixed ${input.preset} response-header preset is emitted at application-server scope and inherited by Forge-owned locations.`},
+        ...(input.hsts === 'off' ? [] : [{code: `composition.security-headers.hsts.${input.hsts}`, capabilityId: this.id, context: 'server' as const, semanticIdentity: 'header:strict-transport-security', message: 'HSTS is emitted only by the HTTPS application server, never by the HTTP redirect server.'}]),
+      ],
+    };
+  },
+};
+
+const requestTimeouts: NginxCapabilityDefinition<RequestTimeoutsInput> = {
+  id: 'request-timeouts', version: '1.0.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'clientMaxBodySizeMb', type: 'integer', required: true, description: 'Maximum accepted request body in MiB, 1-1024.'},
+    {name: 'clientBodyTimeoutSeconds', type: 'integer', required: true, description: 'Timeout between client request-body reads, 1-300 seconds.'},
+    {name: 'clientHeaderTimeoutSeconds', type: 'integer', required: true, description: 'Timeout for reading the complete client request header, 1-300 seconds.'},
+    {name: 'sendTimeoutSeconds', type: 'integer', required: true, description: 'Timeout between client response writes, 1-3600 seconds.'},
+    {name: 'proxy', type: 'object', required: false, description: 'Optional reverse-proxy connection, send, and read timeouts.'},
+  ]},
+  dependencies: [], incompatibleWith: [], requiresSiteOwner: true,
+  astSurface: {contexts: ['server'], directives: ['client_max_body_size', 'client_body_timeout', 'client_header_timeout', 'send_timeout', 'proxy_connect_timeout', 'proxy_send_timeout', 'proxy_read_timeout'], blocks: []},
+  requirements: input => ({minimumNginxVersion: '1.18.0', modules: input.proxy === undefined ? [] : ['http_proxy']}),
+  validate: validateRequestTimeouts,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    return {
+      requiresProxyOwner: input.proxy !== undefined,
+      serverDirectives: [
+        directive('client_max_body_size', [arg.size(`${input.clientMaxBodySizeMb}m`)], provenance),
+        directive('client_body_timeout', [arg.duration(`${input.clientBodyTimeoutSeconds}s`)], provenance),
+        directive('client_header_timeout', [arg.duration(`${input.clientHeaderTimeoutSeconds}s`)], provenance),
+        directive('send_timeout', [arg.duration(`${input.sendTimeoutSeconds}s`)], provenance),
+        ...(input.proxy === undefined ? [] : [
+          directive('proxy_connect_timeout', [arg.duration(`${input.proxy.connectSeconds}s`)], provenance),
+          directive('proxy_send_timeout', [arg.duration(`${input.proxy.sendSeconds}s`)], provenance),
+          directive('proxy_read_timeout', [arg.duration(`${input.proxy.readSeconds}s`)], provenance),
+        ]),
+      ],
+      prerequisites: [{code: 'composition.request-timeouts.capacity', capabilityId: this.id, kind: 'operator-action', description: 'Load-test body limits and inactivity timeouts against representative uploads, downloads, streaming intervals, and slow clients before rollout.'}],
+      explanations: [{code: 'composition.request-timeouts.server', capabilityId: this.id, context: 'server', semanticIdentity: 'request-timeouts', message: 'Bounded request-size and inactivity timeouts apply at application-server scope.'}],
+    };
+  },
+};
+
+const compression: NginxCapabilityDefinition<CompressionInput> = {
+  id: 'compression', version: '1.0.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'types', type: 'array', required: true, maximumItems: compressionTypes.length, description: 'One or more trusted compressible MIME types; text/html remains an Nginx built-in.'},
+    {name: 'minLengthBytes', type: 'integer', required: true, description: 'Minimum response size eligible for compression, 256-65536 bytes.'},
+    {name: 'level', type: 'integer', required: true, description: 'Compression level, 1-9.'},
+    {name: 'vary', type: 'boolean', required: true, description: 'Emit Vary: Accept-Encoding when compression can apply.'},
+  ]},
+  dependencies: [], incompatibleWith: [], requiresSiteOwner: true,
+  astSurface: {contexts: ['server'], directives: ['gzip', 'gzip_types', 'gzip_min_length', 'gzip_comp_level', 'gzip_vary'], blocks: []},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_gzip']}),
+  validate: validateCompression,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    return {
+      serverDirectives: [
+        directive('gzip', [arg.keyword('on')], provenance),
+        directive('gzip_types', input.types.map(value => arg.mediaType(value)), provenance),
+        directive('gzip_min_length', [arg.integer(input.minLengthBytes)], provenance),
+        directive('gzip_comp_level', [arg.integer(input.level)], provenance),
+        directive('gzip_vary', [arg.keyword(input.vary ? 'on' : 'off')], provenance),
+      ],
+      prerequisites: [
+        {code: 'composition.compression.sensitive-data', capabilityId: this.id, kind: 'operator-action', description: 'Do not compress responses that reflect attacker-controlled input alongside secrets; review BREACH-style side-channel exposure and disable compression for sensitive response paths upstream.'},
+        {code: 'composition.compression.capacity', capabilityId: this.id, kind: 'operator-action', description: 'Measure CPU, latency, and bandwidth with representative payloads before selecting a production compression level.'},
+      ],
+      explanations: [{code: 'composition.compression.enabled', capabilityId: this.id, context: 'server', semanticIdentity: 'gzip', message: 'Bounded gzip settings are emitted at application-server scope for a closed MIME-type allowlist.'}],
+    };
+  },
+};
+
+const proxyBuffering: NginxCapabilityDefinition<ProxyBufferingInput> = {
+  id: 'proxy-buffering', version: '1.0.0',
+  inputSchema: {version: '1.0', additionalProperties: false, fields: [
+    {name: 'profile', type: 'enum', required: true, values: ['bounded', 'streaming'], description: 'Bounded response buffering or immediate streaming for SSE/streaming workloads.'},
+    {name: 'bufferSizeKb', type: 'integer', required: false, description: 'First-response/header buffer, 4-64 KiB.'},
+    {name: 'bufferCount', type: 'integer', required: false, description: 'Per-response buffer count, 4-16.'},
+    {name: 'busyBuffersSizeKb', type: 'integer', required: false, description: 'Busy buffer budget constrained by the selected buffer pool.'},
+    {name: 'maxTempFileSizeMb', type: 'integer', required: false, description: 'Maximum temporary-file spill, 0-1024 MiB.'},
+  ]},
+  dependencies: ['reverse-proxy'], incompatibleWith: ['static-site'], requiresSiteOwner: false,
+  astSurface: {contexts: ['server'], directives: ['proxy_buffering', 'proxy_request_buffering', 'proxy_buffer_size', 'proxy_buffers', 'proxy_busy_buffers_size', 'proxy_max_temp_file_size'], blocks: []},
+  requirements: () => ({minimumNginxVersion: '1.18.0', modules: ['http_proxy']}),
+  validate: validateProxyBuffering,
+  contribute(input) {
+    const provenance = source(this.id, this.version);
+    if (input.profile === 'streaming') return {
+      serverDirectives: [directive('proxy_buffering', [arg.keyword('off')], provenance), directive('proxy_request_buffering', [arg.keyword('off')], provenance)],
+      prerequisites: [{code: 'composition.proxy-buffering.streaming', capabilityId: this.id, kind: 'operator-action', description: 'Streaming disables request replay after body transmission begins and reduces Nginx response isolation; verify upstream backpressure, SSE heartbeat intervals, retries, and client disconnect behavior.'}],
+      explanations: [{code: 'composition.proxy-buffering.streaming', capabilityId: this.id, context: 'server', semanticIdentity: 'proxy-buffering', message: 'Proxy request and response buffering are disabled for streaming/SSE compatibility.'}],
+    };
+    return {
+      serverDirectives: [
+        directive('proxy_buffering', [arg.keyword('on')], provenance),
+        directive('proxy_request_buffering', [arg.keyword('on')], provenance),
+        directive('proxy_buffer_size', [arg.size(`${input.bufferSizeKb}k`)], provenance),
+        directive('proxy_buffers', [arg.integer(input.bufferCount as number), arg.size(`${input.bufferSizeKb}k`)], provenance),
+        directive('proxy_busy_buffers_size', [arg.size(`${input.busyBuffersSizeKb}k`)], provenance),
+        directive('proxy_max_temp_file_size', [arg.size(`${input.maxTempFileSizeMb}m`)], provenance),
+      ],
+      prerequisites: [{code: 'composition.proxy-buffering.resources', capabilityId: this.id, kind: 'operator-action', description: 'Capacity-test per-connection memory and temporary-file usage under concurrency; ensure the proxy temporary path has bounded disk capacity and suitable permissions.'}],
+      explanations: [{code: 'composition.proxy-buffering.bounded', capabilityId: this.id, context: 'server', semanticIdentity: 'proxy-buffering', message: 'Proxy buffering uses an explicitly bounded memory pool and temporary-file ceiling.'}],
+    };
+  },
+};
 
 const logging: NginxCapabilityDefinition<LoggingInput> = {
   id: 'logging',
@@ -690,7 +919,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const definitions = deepFreeze({logging, reverseProxy, routing, staticSite, tls, trafficLimiting, upstreamLoadBalancing, websocket} as const);
+const definitions = deepFreeze({compression, logging, proxyBuffering, requestTimeouts, reverseProxy, routing, securityHeaders, staticSite, tls, trafficLimiting, upstreamLoadBalancing, websocket} as const);
 
 export function getCapabilityDefinition(id: string): NginxCapabilityDefinition | undefined {
   return Object.values(definitions).find(definition => definition.id === id);
