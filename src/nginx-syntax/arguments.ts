@@ -3,6 +3,7 @@ import {FORGE_JSON_LOG_FORMAT_NAME, FORGE_JSON_LOG_FORMAT_TEMPLATE} from './type
 import type {KnownNginxVariable, NginxArgument} from './types.js';
 
 const allowedVariables = new Set<KnownNginxVariable>([
+  '$binary_remote_addr',
   '$connection_upgrade',
   '$host',
   '$http_upgrade',
@@ -109,6 +110,15 @@ function validLocationPrefix(value: string): boolean {
     && !value.split('/').includes('..');
 }
 
+function validLimitZoneName(value: string, kind: 'req' | 'conn'): boolean {
+  return new RegExp(`^forge_${kind}_[a-z][a-z0-9_]{0,24}$`).test(value);
+}
+
+function validLimitZoneDefinition(value: string, kind: 'req' | 'conn'): boolean {
+  const match = /^zone=([a-z][a-z0-9_]{0,62}):(\d{1,2})m$/.exec(value);
+  return match !== null && match[1] !== undefined && validLimitZoneName(match[1], kind) && Number(match[2]) >= 1 && Number(match[2]) <= 32;
+}
+
 export function validateArgument(argument: unknown, rule: ArgumentRule): string | undefined {
   if (argument === null || typeof argument !== 'object' || Array.isArray(argument)) return 'Argument must be a typed Nginx argument.';
   const candidate = argument as Partial<NginxArgument>;
@@ -146,6 +156,24 @@ export function validateArgument(argument: unknown, rule: ArgumentRule): string 
       return value === FORGE_JSON_LOG_FORMAT_NAME ? undefined : `Log format name must be the reserved ${FORGE_JSON_LOG_FORMAT_NAME} preset.`;
     case 'log-format-template':
       return value === FORGE_JSON_LOG_FORMAT_TEMPLATE ? undefined : 'Log format template must exactly match a trusted Forge preset.';
+    case 'request-limit-zone-definition':
+      return validLimitZoneDefinition(value, 'req') ? undefined : 'Request-limit zone must use an engine-owned name and a size from 1m through 32m.';
+    case 'connection-limit-zone-definition':
+      return validLimitZoneDefinition(value, 'conn') ? undefined : 'Connection-limit zone must use an engine-owned name and a size from 1m through 32m.';
+    case 'request-limit-zone-reference': {
+      const name = value.startsWith('zone=') ? value.slice(5) : '';
+      return validLimitZoneName(name, 'req') ? undefined : 'Request-limit reference must select an engine-owned request zone.';
+    }
+    case 'connection-limit-zone-name':
+      return validLimitZoneName(value, 'conn') ? undefined : 'Connection-limit reference must select an engine-owned connection zone.';
+    case 'request-limit-rate': {
+      const match = /^rate=(\d{1,5})r\/(s|m)$/.exec(value);
+      return match !== null && Number(match[1]) >= 1 && Number(match[1]) <= 10_000 ? undefined : 'Request rate must be an integer from 1 through 10000 requests per second or minute.';
+    }
+    case 'request-limit-burst': {
+      const match = /^burst=(\d{1,5})$/.exec(value);
+      return match !== null && Number(match[1]) >= 1 && Number(match[1]) <= 10_000 ? undefined : 'Request burst must be an integer from 1 through 10000.';
+    }
     case 'redirect-url': {
       const match = /^https:\/\/([a-z0-9.-]+)\$request_uri$/.exec(value);
       return match !== null && validDomain(match[1] ?? '') ? undefined : 'Redirect URL must use a validated HTTPS domain followed by the literal $request_uri variable.';

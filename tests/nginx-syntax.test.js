@@ -54,6 +54,8 @@ test('trusted registries expose the supported Phase 1 surface without arbitrary 
   assert.ok(listDirectiveDefinitions().some(item => item.id === 'upstream_server' && item.nginxName === 'server'));
   assert.ok(listDirectiveDefinitions().some(item => item.id === 'access_log' && item.contexts.includes('location')));
   assert.ok(listDirectiveDefinitions().some(item => item.id === 'log_format' && item.contexts.length === 1 && item.contexts[0] === 'http'));
+  assert.ok(listDirectiveDefinitions().some(item => item.id === 'limit_req_zone' && item.contexts.length === 1 && item.contexts[0] === 'http'));
+  assert.ok(listDirectiveDefinitions().some(item => item.id === 'limit_conn_zone' && item.contexts.length === 1 && item.contexts[0] === 'http'));
   assert.throws(() => { listDirectiveDefinitions()[0].nginxName = 'raw'; }, TypeError);
   assert.throws(() => { listBlockDefinitions()[0].parents.push('server'); }, TypeError);
 });
@@ -116,6 +118,80 @@ test('duplicate trusted log-format declarations are rejected by semantic key', (
   http.children.push(format(), format());
   const diagnostics = validateNginxDocument(document);
   assert.ok(diagnostics.some(item => item.code === 'nginx.directive.duplicate'));
+});
+
+test('trusted traffic-limiting directives serialize in HTTP and server contexts', () => {
+  const document = fullDocument();
+  const http = document.children.find(node => node.kind === 'block' && node.blockType === 'http');
+  const server = http.children.find(node => node.kind === 'block' && node.blockType === 'server');
+  http.children.push(
+    directive('limit_req_zone', [arg.variable('$binary_remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_api:10m'), arg.requestLimitRate('rate=25r/s')], source),
+    directive('limit_conn_zone', [arg.variable('$binary_remote_addr'), arg.connectionLimitZoneDefinition('zone=forge_conn_api:8m')], source),
+  );
+  server.children.push(
+    directive('limit_req', [arg.requestLimitZoneReference('zone=forge_req_api'), arg.requestLimitBurst('burst=10'), arg.keyword('nodelay')], source),
+    directive('limit_req_status', [arg.integer(429)], source),
+    directive('limit_conn', [arg.connectionLimitZoneName('forge_conn_api'), arg.integer(20)], source),
+    directive('limit_conn_status', [arg.integer(503)], source),
+  );
+  const result = serializeNginxDocument(document);
+  assert.equal(result.ok, true);
+  const content = result.artifacts[0].content;
+  assert.match(content, /limit_req_zone \$binary_remote_addr zone=forge_req_api:10m rate=25r\/s;/);
+  assert.match(content, /limit_conn_zone \$binary_remote_addr zone=forge_conn_api:8m;/);
+  assert.match(content, /limit_req zone=forge_req_api burst=10 nodelay;/);
+  assert.match(content, /limit_conn forge_conn_api 20;/);
+});
+
+test('traffic-limiting grammar rejects unsafe keys, cross-kind names, invalid bounds, and contexts', () => {
+  const invalidHttpNodes = [
+    directive('limit_req_zone', [arg.variable('$remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_api:10m'), arg.requestLimitRate('rate=1r/s')], source),
+    directive('limit_req_zone', [arg.variable('$binary_remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_bad;include:10m'), arg.requestLimitRate('rate=1r/s')], source),
+    directive('limit_req_zone', [arg.variable('$binary_remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_api:33m'), arg.requestLimitRate('rate=1r/s')], source),
+    directive('limit_req_zone', [arg.variable('$binary_remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_api:10m'), arg.requestLimitRate('rate=0r/s')], source),
+    directive('limit_conn_zone', [arg.variable('$binary_remote_addr'), arg.connectionLimitZoneDefinition('zone=forge_req_api:10m')], source),
+  ];
+  for (const node of invalidHttpNodes) {
+    const diagnostics = validateNginxDocument({profile: 'full-config', source, children: [block('events', [], [], source), block('http', [], [node, serverBlock()], source)]});
+    assert.ok(diagnostics.some(item => item.severity === 'error'), node.name);
+  }
+
+  const invalidServerNodes = [
+    directive('limit_req', [arg.requestLimitZoneReference('zone=forge_conn_api')], source),
+    directive('limit_req', [arg.requestLimitZoneReference('zone=forge_req_api'), arg.requestLimitBurst('burst=0')], source),
+    directive('limit_req_status', [arg.integer(399)], source),
+    directive('limit_conn', [arg.connectionLimitZoneName('forge_req_api'), arg.integer(1)], source),
+    directive('limit_conn', [arg.connectionLimitZoneName('forge_conn_api'), arg.integer(10_001)], source),
+    directive('limit_conn_status', [arg.integer(600)], source),
+  ];
+  for (const node of invalidServerNodes) {
+    const result = serializeNginxDocument({profile: 'site-fragment', source, children: [block('server', [], [node], source)]});
+    assert.equal(result.ok, false, node.name);
+  }
+
+  const illegalContext = {profile: 'full-config', source, children: [
+    block('events', [], [directive('limit_req', [arg.requestLimitZoneReference('zone=forge_req_api')], source)], source),
+    block('http', [], [serverBlock()], source),
+  ]};
+  assert.ok(validateNginxDocument(illegalContext).some(item => item.code === 'nginx.directive.context'));
+});
+
+test('traffic zone duplicate detection uses the zone identity rather than the shared key', () => {
+  const zone = (name, rate) => directive('limit_req_zone', [
+    arg.variable('$binary_remote_addr'),
+    arg.requestLimitZoneDefinition(`zone=${name}:10m`),
+    arg.requestLimitRate(`rate=${rate}r/s`),
+  ], source);
+  const distinct = {profile: 'full-config', source, children: [block('events', [], [], source), block('http', [], [zone('forge_req_alpha', 1), zone('forge_req_bravo', 2), serverBlock()], source)]};
+  assert.equal(serializeNginxDocument(distinct).ok, true);
+  const duplicate = {profile: 'full-config', source, children: [block('events', [], [], source), block('http', [], [zone('forge_req_alpha', 1), zone('forge_req_alpha', 2), serverBlock()], source)]};
+  assert.ok(validateNginxDocument(duplicate).some(item => item.code === 'nginx.directive.duplicate'));
+  const conflictingSize = {profile: 'full-config', source, children: [block('events', [], [], source), block('http', [], [
+    zone('forge_req_alpha', 1),
+    directive('limit_req_zone', [arg.variable('$binary_remote_addr'), arg.requestLimitZoneDefinition('zone=forge_req_alpha:12m'), arg.requestLimitRate('rate=1r/s')], source),
+    serverBlock(),
+  ], source)]};
+  assert.ok(validateNginxDocument(conflictingSize).some(item => item.code === 'nginx.directive.duplicate'));
 });
 
 test('full configuration validates and serializes every supported context deterministically', () => {
